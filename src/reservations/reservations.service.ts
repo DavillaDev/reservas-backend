@@ -230,8 +230,7 @@ export class ReservationsService {
     const client = new MercadoPagoConfig({ accessToken: platformAccessToken });
     const payment = new Payment(client);
 
-    const baseUrl =
-      this.configService.get('API_BASE_URL') || 'http://localhost:3000';
+    const baseUrl = this.configService.get('API_BASE_URL');
     const notificationUrl = `${baseUrl}/reservations/webhook`;
 
     const expiresAtDate = addMinutes(new Date(), 15);

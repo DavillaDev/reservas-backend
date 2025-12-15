@@ -29,7 +29,7 @@ export class UploadController {
   uploadFile(@UploadedFile() file: Express.Multer.File) {
     // 🚨 CORREÇÃO AQUI:
     // Pega a URL definida no Render (API_BASE_URL) ou usa localhost se estiver no PC
-    const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
+    const baseUrl = process.env.API_BASE_URL;
 
     // Retorna a URL correta (Ex: https://sua-api.onrender.com/uploads/xyz.jpg)
     return {
