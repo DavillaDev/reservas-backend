@@ -1,0 +1,159 @@
+// api/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================
+// 1. USUÁRIOS (QUEM LOGA NO SISTEMA)
+// =========================================================
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // Senha Hasheada (Bcrypt)
+  name      String
+  
+  // Controle de Acesso
+  role      UserRole @default(STAFF)
+  
+  // Vínculo: A qual balada esse usuário pertence?
+  // (Se for null, e o role for SUPERADMIN, é você, Thulio)
+  nightclubId String?
+  nightclub   Nightclub? @relation(fields: [nightclubId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// =========================================================
+// 2. A BALADA (O CLIENTE QUE TE PAGA)
+// =========================================================
+model Nightclub {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  logoUrl     String?  
+  mapUrl      String?  
+  themeColor  String?  @default("#697cafff")
+  whatsapp    String
+  
+  // SAAS & FINANCEIRO (O SEGREDO DO SPLIT)
+  // Define quanto (%) você morde de cada transação dessa balada
+  appFeePercent Decimal @default(5.0) 
+  
+  // Token do Mercado Pago DELES (Para onde vai o dinheiro líquido)
+  mpAccessToken String? 
+
+  repassPixKey    String?
+  repassPixKeyType String? // e.g., 'CPF', 'CNPJ', 'EMAIL', 'PHONE', 'EVP'
+  
+  // Configurações visuais e regras gerais
+  settings    Json?    
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relações
+  users        User[]        // Dobre de usuários dessa balada
+  spaces       Space[]
+  reservations Reservation[]
+
+  @@map("nightclubs")
+}
+
+// =========================================================
+// 3. O INVENTÁRIO (MESAS/CAMAROTES)
+// =========================================================
+model Space {
+  id             String      @id @default(uuid())
+  nightclubId    String
+  name           String
+  type           SpaceType
+  capacity       Int
+  status         SpaceStatus @default(ACTIVE)
+  
+  price          Decimal?    @default(0.0)
+  minConsumption Decimal?    @default(0.0)
+
+  description    String?
+  mapPosition    Json?       
+
+  nightclub    Nightclub   @relation(fields: [nightclubId], references: [id])
+  reservations Reservation[]
+
+  @@map("spaces")
+}
+
+// =========================================================
+// 4. AS RESERVAS (O DINHEIRO ENTRANDO)
+// =========================================================
+model Reservation {
+  id            String            @id @default(uuid())
+  nightclubId   String
+  spaceId       String
+  date          DateTime          @db.Date
+  
+  customerName  String
+  customerPhone String
+  customerEmail String?            
+  
+  isBirthday    Boolean           @default(false) 
+  birthdayDate  DateTime?         
+  notes         String?            
+
+  status        ReservationStatus @default(PENDING)
+  checkInTime   DateTime?
+  checkInAt       DateTime?
+  validationToken String? @unique
+
+  
+  // FINANCEIRO
+  amount           Decimal?   @default(0.0)
+  paymentId        String?    @unique 
+  paymentCreatedAt DateTime?
+  paymentDeadline DateTime?
+  
+  createdAt      DateTime          @default(now())
+
+  nightclub Nightclub @relation(fields: [nightclubId], references: [id])
+  space     Space     @relation(fields: [spaceId], references: [id])
+
+  @@map("reservations")
+}
+
+// =========================================================
+// ENUMS
+// =========================================================
+
+enum UserRole {
+  SUPERADMIN // Você (Vê tudo)
+  OWNER      // Dono da Balada (Vê financeiro e configs)
+  STAFF      // Hostess/Portaria (Só vê lista e faz check-in)
+}
+
+enum SpaceType {
+  CAMAROTE
+  BISTRO
+  MESA
+}
+
+enum SpaceStatus {
+  ACTIVE
+  MAINTENANCE
+  DISABLED
+}
+
+enum ReservationStatus {
+  PENDING   
+  CONFIRMED 
+  CANCELED  
+  COMPLETED 
+  CHECKED_IN
+}
