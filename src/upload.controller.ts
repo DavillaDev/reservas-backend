@@ -1,4 +1,3 @@
-// api/src/upload.controller.ts
 import {
   Controller,
   Post,
@@ -28,9 +27,13 @@ export class UploadController {
     }),
   )
   uploadFile(@UploadedFile() file: Express.Multer.File) {
-    // Retorna a URL completa para o frontend salvar
+    // 🚨 CORREÇÃO AQUI:
+    // Pega a URL definida no Render (API_BASE_URL) ou usa localhost se estiver no PC
+    const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
+
+    // Retorna a URL correta (Ex: https://sua-api.onrender.com/uploads/xyz.jpg)
     return {
-      url: `http://localhost:3000/uploads/${file.filename}`,
+      url: `${baseUrl}/uploads/${file.filename}`,
     };
   }
 }
