@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Resend } from 'resend';
 
+// Use seu domínio verificado como um fallback seguro para o remetente
+const DEFAULT_FROM_DOMAIN = 'davillaconsultoria.com.br';
+const DEFAULT_FROM_ADDRESS = `nao-responda@${DEFAULT_FROM_DOMAIN}`;
+
 @Injectable()
 export class MailService {
   private resend: Resend;
@@ -9,10 +13,23 @@ export class MailService {
   constructor() {
     if (!process.env.RESEND_API_KEY) {
       this.logger.error(
-        'RESEND_API_KEY não encontrada nas variáveis de ambiente.',
+        'RESEND_API_KEY não encontrada nas variáveis de ambiente. O serviço de email não funcionará.',
       );
     }
     this.resend = new Resend(process.env.RESEND_API_KEY);
+  }
+
+  // Helper para definir o endereço de envio (FROM)
+  private getFromAddress(settings: any): string {
+    const customDomain = settings?.domain_name?.trim();
+
+    // 1. Se a balada tiver um domínio configurado, usa ele
+    if (customDomain && customDomain.includes('.')) {
+      return `nao-responda@${customDomain}`;
+    }
+
+    // 2. Senão, usa o domínio verificado padrão da Davilla Consultoria
+    return DEFAULT_FROM_ADDRESS;
   }
 
   async sendReservationConfirmation(reservation: any, nightclubName: string) {
@@ -20,6 +37,9 @@ export class MailService {
     const settings = reservation.nightclub.settings as any;
     const customerEmail = reservation.customerEmail;
     const token = reservation.validationToken || 'ERROR-NO-TOKEN';
+
+    // Determina o remetente (AGORA USANDO SEU DOMÍNIO VERIFICADO)
+    const fromAddress = this.getFromAddress(settings);
 
     // Formatação de Moeda e Data para pt-BR
     const formattedDate = new Date(reservation.date).toLocaleDateString(
@@ -39,19 +59,17 @@ export class MailService {
     // Gerador de QR Code (API Pública de Alta Disponibilidade)
     const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${token}&color=000000&bgcolor=ffffff&margin=10`;
 
-    // Configuração de Remetente
-    // Nota: Em produção, você deve verificar o domínio no painel do Resend para usar 'nao-responda@suabalada.com'
-    const fromAddress = 'onboarding@resend.dev';
-
-    // Configuração de Reply-To
+    // Configuração de Reply-To (USANDO replyTo (camelCase) na Resend)
     let replyToAddress = settings?.email_reply_to?.trim();
     if (!replyToAddress || !replyToAddress.includes('@'))
       replyToAddress = undefined;
 
     try {
-      this.logger.log(`📧 Preparando envio para: ${customerEmail}`);
+      this.logger.log(
+        `📧 Preparando envio [FROM: ${fromAddress}] para: ${customerEmail}`,
+      );
 
-      // 2. Construção do Template HTML (Design System: Nightclub Premium)
+      // 2. Construção do Template HTML (Mantido o seu código HTML original)
       const htmlTemplate = `
         <!DOCTYPE html>
         <html lang="pt-BR">
@@ -142,10 +160,9 @@ export class MailService {
 
       // 3. Envio via Resend
       const data = await this.resend.emails.send({
-        from: fromAddress,
+        from: fromAddress, // <- AGORA USA O ENDEREÇO VERIFICADO!
         to: [customerEmail],
-        // 🚨 CORREÇÃO AQUI: 'replyTo' (CamelCase) em vez de 'reply_to'
-        replyTo: replyToAddress,
+        replyTo: replyToAddress, // <- Corrigido para camelCase
         subject: `🎫 Seu Ingresso: ${nightclubName}`,
         html: htmlTemplate,
       });
