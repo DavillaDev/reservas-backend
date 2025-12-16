@@ -14,12 +14,11 @@ export class UploadController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: './uploads', // Salva na pasta uploads na raiz da API
+        destination: './uploads',
         filename: (req, file, cb) => {
-          // Gera um nome único: random + extensão original
           const randomName = Array(32)
             .fill(null)
-            .map(() => Math.round(Math.random() * 16).toString(16))
+            .map(() => Math.floor(Math.random() * 16).toString(16))
             .join('');
           cb(null, `${randomName}${extname(file.originalname)}`);
         },
@@ -27,13 +26,9 @@ export class UploadController {
     }),
   )
   uploadFile(@UploadedFile() file: Express.Multer.File) {
-    // 🚨 CORREÇÃO AQUI:
-    // Pega a URL definida no Render (API_BASE_URL) ou usa localhost se estiver no PC
-    const baseUrl = process.env.API_BASE_URL;
-
-    // Retorna a URL correta (Ex: https://sua-api.onrender.com/uploads/xyz.jpg)
+    // ✅ RETORNE APENAS O CAMINHO
     return {
-      url: `${baseUrl}/uploads/${file.filename}`,
+      path: `/uploads/${file.filename}`,
     };
   }
 }
