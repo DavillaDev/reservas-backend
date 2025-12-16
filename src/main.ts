@@ -1,4 +1,4 @@
-// src/main.ts (Versão Final Corrigida)
+// src/main.ts
 
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -10,7 +10,7 @@ import { ValidationPipe } from '@nestjs/common';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // 1. Configuração do Validação Global (para o MasterKeyDto funcionar)
+  // ✅ Validação global
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
@@ -18,36 +18,42 @@ async function bootstrap() {
     }),
   );
 
-  // 2. Habilita o Cookie Parser (requer instalação via npm)
+  // ✅ Cookies
   app.use(cookieParser());
 
-  // 3. 🔑 CORREÇÃO CRÍTICA DO CORS PARA COOKIES
-
-  // Lista de Strings Válidas (filtra undefined no nível do tipo TS)
-  const frontendUrl = process.env.FRONTEND_URL;
-
-  // Garante que a lista contenha apenas strings
-  const allowedOrigins: string[] = [
-    'http://localhost:3001',
+  // ✅ Origens permitidas
+  const allowedOrigins = [
     'http://localhost:3000',
-    // 💡 Exemplo da sua URL Vercel
+    'http://localhost:3001',
     'https://reservas-two-alpha.vercel.app',
   ];
 
-  if (frontendUrl) {
-    allowedOrigins.push(frontendUrl);
+  if (process.env.FRONTEND_URL) {
+    allowedOrigins.push(process.env.FRONTEND_URL);
   }
 
+  // ✅ CORS CORRETO PARA COOKIE (produção-safe)
   app.enableCors({
-    origin: allowedOrigins, // Permite apenas domínios confiáveis
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true, // CRÍTICO: Permite que o Front-end envie/receba cookies
-  }); // Configura a pasta 'uploads' para ser pública
+    origin: (origin, callback) => {
+      // Permite chamadas sem origin (SSR, healthcheck, etc)
+      if (!origin) return callback(null, true);
 
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('Not allowed by CORS'), false);
+    },
+    credentials: true,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+  });
+
+  // ✅ Static uploads
   app.useStaticAssets(join(__dirname, '..', 'uploads'), {
     prefix: '/uploads/',
   });
 
-  await app.listen(3000);
+  // ✅ Porta correta para Render / Docker
+  await app.listen(process.env.PORT || 3000);
 }
 bootstrap();
