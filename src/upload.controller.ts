@@ -8,6 +8,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 
+const baseUrl = process.env.API_URL;
+
 @Controller('upload')
 export class UploadController {
   @Post()
@@ -28,7 +30,7 @@ export class UploadController {
   uploadFile(@UploadedFile() file: Express.Multer.File) {
     // ✅ RETORNE APENAS O CAMINHO
     return {
-      url: `/uploads/${file.filename}`,
+      url: `${baseUrl}/uploads/${file.filename}`,
     };
   }
 }
