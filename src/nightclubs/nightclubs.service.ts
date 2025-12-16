@@ -101,24 +101,29 @@ export class NightclubsService {
   } // 6. DELETAR (Transação em Cascata)
 
   async remove(id: string) {
+    // Usamos uma transação para garantir que ou deleta TUDO ou não deleta NADA
     return this.prisma.$transaction(async (tx) => {
+      // 1. Deletar Reservas (dependem da balada e do espaço)
       await tx.reservation.deleteMany({
         where: { nightclubId: id },
       });
 
+      // 2. Deletar Espaços (Mesas/Camarotes)
       await tx.space.deleteMany({
         where: { nightclubId: id },
       });
 
+      // 4. Deletar Usuários vinculados a esta balada
       await tx.user.deleteMany({
         where: { nightclubId: id },
       });
 
-      const nightclub = await tx.nightclub.delete({
+      // 5. Por fim, deletar a Balada
+      const deletedClub = await tx.nightclub.delete({
         where: { id },
       });
 
-      return nightclub;
+      return deletedClub;
     });
   }
 
