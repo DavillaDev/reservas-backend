@@ -1,17 +1,20 @@
 // src/main.ts
-
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 import cookieParser from 'cookie-parser';
 import { ValidationPipe } from '@nestjs/common';
+import * as fs from 'fs';
 
 async function bootstrap() {
+  // ✅ GARANTE QUE A PASTA EXISTE NO RENDER
+  if (!fs.existsSync('uploads')) {
+    fs.mkdirSync('uploads');
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // 🔑 ALTERAÇÃO REALIZADA: whitelist definido como false
-  // Isso impede que o NestJS apague os campos do DTO que não possuem decoradores.
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
@@ -31,24 +34,21 @@ async function bootstrap() {
     allowedOrigins.push(process.env.FRONTEND_URL);
   }
 
-  const origins = allowedOrigins.filter((o) => !!o) as (string | RegExp)[];
+  const origins = allowedOrigins.filter(Boolean) as (string | RegExp)[];
 
   app.enableCors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-
-      if (origins.includes(origin)) {
-        return callback(null, true);
-      }
-
+      if (origins.includes(origin)) return callback(null, true);
       return callback(new Error('Not allowed by CORS'), false);
     },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   });
 
+  // ✅ SERVE UPLOADS CORRETAMENTE
   app.useStaticAssets(join(__dirname, '..', 'uploads'), {
-    prefix: '/uploads/',
+    prefix: '/uploads',
   });
 
   await app.listen(process.env.PORT || 3000);
