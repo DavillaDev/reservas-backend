@@ -28,7 +28,7 @@ export class UploadController {
   uploadFile(@UploadedFile() file: Express.Multer.File) {
     // ✅ RETORNE APENAS O CAMINHO
     return {
-      path: `/uploads/${file.filename}`,
+      url: `/uploads/${file.filename}`,
     };
   }
 }
