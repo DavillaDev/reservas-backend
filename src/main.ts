@@ -18,9 +18,6 @@ async function bootstrap() {
     }),
   );
 
-  // ✅ Cookies
-  app.use(cookieParser());
-
   // ✅ Origens permitidas
   const allowedOrigins = [
     'http://localhost:3000',
