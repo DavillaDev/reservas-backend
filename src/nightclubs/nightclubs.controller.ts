@@ -1,4 +1,4 @@
-// api/src/nightclubs/nightclubs.controller.ts (ATUALIZADO PARA OAUTH MP CONNECT)
+// api/src/nightclubs/nightclubs.controller.ts
 
 import {
   Controller,
@@ -9,20 +9,23 @@ import {
   Param,
   Delete,
   UseGuards,
-  Res, // 🔑 NOVO: Para redirecionamento HTTP
-  Query, // 🔑 NOVO: Para capturar parâmetros da URL de retorno do MP
-  Redirect, // 🔑 NOVO: Para redirecionar para a URL de OAuth
+  Res,
+  Query,
 } from '@nestjs/common';
 import { NightclubsService } from './nightclubs.service';
 import { CreateNightclubDto } from './dto/create-nightclub.dto';
 import { UpdateNightclubDto } from './dto/update-nightclub.dto';
 import { MasterAuthGuard } from '../super/guards/master-auth.guard';
-// 🚨 Nota: Assumimos a existência de um AdminAuthGuard para o Admin local,
-// mas usaremos apenas a validação no serviço por enquanto.
+
+// URL do seu Frontend na Vercel para redirecionamentos
+const FRONTEND_URL = 'https://reservas-two-alpha.vercel.app';
 
 @Controller('nightclubs')
 export class NightclubsController {
-  constructor(private readonly nightclubsService: NightclubsService) {} // --- ROTAS PROTEGIDAS PELO MASTER ADMIN ---
+  constructor(private readonly nightclubsService: NightclubsService) {}
+
+  // --- ROTAS PROTEGIDAS APENAS PELO MASTER ADMIN (Plataforma) ---
+
   @UseGuards(MasterAuthGuard)
   @Post()
   create(@Body() createNightclubDto: CreateNightclubDto) {
@@ -36,6 +39,15 @@ export class NightclubsController {
   }
 
   @UseGuards(MasterAuthGuard)
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.nightclubsService.remove(id);
+  }
+
+  // --- ROTAS ACESSÍVEIS PELO ADMIN LOCAL (DONO DA BALADA) ---
+
+  // 🛡️ CORREÇÃO: Removido MasterAuthGuard para permitir que a balada se atualize.
+  // A segurança de "quem pode editar o que" deve estar no Service.
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -43,12 +55,6 @@ export class NightclubsController {
   ) {
     return this.nightclubsService.update(id, updateNightclubDto);
   }
-
-  @UseGuards(MasterAuthGuard)
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.nightclubsService.remove(id);
-  } // --- ROTAS PÚBLICAS OU PROTEGIDAS PELO ADMIN LOCAL ---
 
   @Get('slug/:slug')
   findBySlug(@Param('slug') slug: string) {
@@ -58,43 +64,52 @@ export class NightclubsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.nightclubsService.findOne(id);
-  } // =========================================================
-  // 🔑 NOVA ROTA: INICIAR CONEXÃO OAUTH MP CONNECT (Redirecionamento)
-  // =========================================================
-  // Esta rota deve ser chamada pelo Front-end Admin Local
+  }
 
-  @Get('connect/:id')
-  async startMpConnect(
-    @Param('id') nightclubId: string,
-    @Res() res: any, // Usamos 'any' aqui para facilitar a injeção do Express Response
-  ) {
-    // O Service gera a URL de OAuth e faz o redirecionamento
-    const redirectUrl =
-      await this.nightclubsService.generateMpConnectUrl(nightclubId); // Redireciona o usuário para o Mercado Pago
-    return res.redirect(redirectUrl);
-  } // =========================================================
-  // 🔑 NOVA ROTA: CALLBACK MP CONNECT (Mercado Pago Retorna Aqui)
   // =========================================================
-  // Esta é a rota configurada no painel do MP (Redirect URI)
+  // 🔑 OAUTH MP CONNECT: INICIAR CONEXÃO
+  // =========================================================
+  @Get('connect/:id')
+  async startMpConnect(@Param('id') nightclubId: string, @Res() res: any) {
+    try {
+      const redirectUrl =
+        await this.nightclubsService.generateMpConnectUrl(nightclubId);
+      return res.redirect(redirectUrl);
+    } catch (error) {
+      console.error('Erro ao gerar URL MP:', error);
+      return res.redirect(`${FRONTEND_URL}/admin/settings?error=mp_url_failed`);
+    }
+  }
+
+  // =========================================================
+  // 🔑 OAUTH MP CONNECT: CALLBACK (Retorno do Mercado Pago)
+  // =========================================================
   @Get('mp-callback')
   async handleMpCallback(
     @Query('code') code: string,
-    @Query('state') nightclubId: string, // O 'state' é o ID da balada que enviamos antes
+    @Query('state') nightclubId: string,
     @Res() res: any,
   ) {
+    // 🛡️ Validação de segurança básica
     if (!code || !nightclubId) {
-      // Em caso de erro ou parâmetros ausentes, redireciona para o painel com erro.
-      return res.redirect('/admin/settings?error=mp_auth_failed');
+      return res.redirect(
+        `${FRONTEND_URL}/admin/settings?error=mp_auth_failed`,
+      );
     }
 
     try {
-      // O Service processa o código e salva o access_token/user_id do cliente
-      await this.nightclubsService.handleMpCallback(code, nightclubId); // Redireciona o cliente de volta para o painel de Configurações, com sucesso.
+      // O Service troca o 'code' por 'access_token' e salva no banco
+      await this.nightclubsService.handleMpCallback(code, nightclubId);
 
-      return res.redirect('/admin/settings?success=mp_connected');
+      // ✅ Redireciona para o painel da Vercel com sucesso
+      return res.redirect(
+        `${FRONTEND_URL}/admin/settings?success=mp_connected`,
+      );
     } catch (error) {
       console.error('Erro no Callback do MP:', error);
-      return res.redirect('/admin/settings?error=mp_token_exchange_failed');
+      return res.redirect(
+        `${FRONTEND_URL}/admin/settings?error=mp_token_exchange_failed`,
+      );
     }
   }
 }
