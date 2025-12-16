@@ -1,16 +1,15 @@
-// src/main.ts
+// src/main.ts (CORREÇÃO FINAL: ATIVANDO O COOKIE PARSER)
 
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
-import * as cookieParser from 'cookie-parser';
+import * as cookieParser from 'cookie-parser'; // 🔑 Importado
 import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule); // ✅ Validação global
 
-  // ✅ Validação global
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
@@ -18,8 +17,10 @@ async function bootstrap() {
     }),
   );
 
-  // ✅ Origens permitidas
-  const allowedOrigins = [
+  // 🔑 CORREÇÃO CRÍTICA: ATIVANDO O COOKIE PARSER COMO MIDDLEWARE
+  app.use(cookieParser()); // ✅ Origens permitidas
+
+  const allowedOrigins: string[] = [
     'http://localhost:3000',
     'http://localhost:3001',
     'https://reservas-two-alpha.vercel.app',
@@ -29,13 +30,15 @@ async function bootstrap() {
     allowedOrigins.push(process.env.FRONTEND_URL);
   }
 
-  // ✅ CORS CORRETO PARA COOKIE (produção-safe)
+  // 💡 Remove undefined no nível de tipo, se houver:
+  const origins = allowedOrigins.filter((o) => !!o) as (string | RegExp)[]; // ✅ CORS CORRETO PARA COOKIE
+
   app.enableCors({
     origin: (origin, callback) => {
       // Permite chamadas sem origin (SSR, healthcheck, etc)
       if (!origin) return callback(null, true);
 
-      if (allowedOrigins.includes(origin)) {
+      if (origins.includes(origin)) {
         return callback(null, true);
       }
 
@@ -43,14 +46,12 @@ async function bootstrap() {
     },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-  });
+  }); // ✅ Static uploads
 
-  // ✅ Static uploads
   app.useStaticAssets(join(__dirname, '..', 'uploads'), {
     prefix: '/uploads/',
-  });
+  }); // ✅ Porta correta para Render / Docker
 
-  // ✅ Porta correta para Render / Docker
   await app.listen(process.env.PORT || 3000);
 }
 bootstrap();
