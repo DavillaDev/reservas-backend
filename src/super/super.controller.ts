@@ -6,87 +6,71 @@ import {
   Headers,
   UnauthorizedException,
   BadRequestException,
-  Res, // <-- Importante: Para manipular a resposta
+  Res,
+  UseGuards, // 🔑 NOVO: Para usar o MasterAuthGuard
 } from '@nestjs/common';
 import { SuperService } from './super.service';
-import type { Response } from 'express'; // Importar o tipo de Resposta do Express
+import type { Response } from 'express';
+import { MasterAuthGuard } from './guards/master-auth.guard'; // 🔑 CORREÇÃO: Importa o Guard
+import { MasterKeyDto } from './dto/master-key.dto'; // 🔑 CORREÇÃO: Importa o DTO
 
 @Controller('super')
 export class SuperController {
-  constructor(private readonly superService: SuperService) {}
+  constructor(private readonly superService: SuperService) {} // ** 🚨 A Lógica de validação foi movida para o service ou guard **
+  // Deixamos esta função para o service ou a removemos, pois o Guard faz a checagem da sessão.
 
-  // ** 🚨 FUNÇÃO validateKey REVERTIDA PARA PRIVADA E CHECA MASTER KEY **
+  // Vamos manter temporariamente para o POST /auth
   private validateMasterKey(key?: string) {
     if (!key || key !== process.env.MASTER_KEY) {
       throw new UnauthorizedException('Master key inválida.');
     }
-  }
+  } // ====================================================================
+  // 1. ROTA DE AUTENTICAÇÃO (Login) - Define o Cookie
+  // ====================================================================
 
-  // ====================================================================
-  // 1. NOVA ROTA DE AUTENTICAÇÃO (Login)
-  // O Front-end usará esta rota APENAS para trocar a masterKey pela sessão.
-  // ====================================================================
   @Post('auth')
   async authenticateMaster(
-    @Body('masterKey') masterKey: string,
+    @Body() { masterKey }: MasterKeyDto, // 🔑 CORREÇÃO: Usa o DTO
     @Res({ passthrough: true }) res: Response,
   ) {
-    this.validateMasterKey(masterKey); // Valida a Master Key
+    this.validateMasterKey(masterKey); // Sucesso na validação!
 
-    // Sucesso na validação!
+    const sessionToken = `master-${Date.now()}`; // Define o Cookie HTTP-ONLY
 
-    // Gera um token de sessão simples ou um JWT
-    const sessionToken = `master-${Date.now()}`;
-
-    // Define o Cookie HTTP-ONLY (Correção de Segurança)
     res.cookie('master_session', sessionToken, {
-      httpOnly: true, // IMPEDE ACESSO VIA JAVASCRIPT (Proteção contra XSS)
-      secure: process.env.NODE_ENV === 'production', // Só envia em HTTPS em produção
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
       maxAge: 1000 * 60 * 60 * 24, // 24 horas de validade
-      sameSite: 'strict', // Proteção CSRF
+      sameSite: 'strict',
     });
 
     return { success: true, message: 'Sessão Mestra estabelecida.' };
   }
 
   // ====================================================================
+  // 1.5. NOVA ROTA DE LOGOUT - Remove o Cookie
+  // ====================================================================
+  @Post('logout')
+  async logoutMaster(@Res({ passthrough: true }) res: Response) {
+    res.clearCookie('master_session');
+    return { success: true, message: 'Sessão Mestra encerrada.' };
+  } // ====================================================================
   // 2. ROTA DE DASHBOARD (Acesso Contínuo)
-  // Agora precisa de um GUARD/MIDDLEWARE para checar o Cookie.
-  // A checagem do Header 'x-master-key' será removida em breve.
+  // APLICAMOS O GUARD DE COOKIE AQUI.
   // ====================================================================
 
+  @UseGuards(MasterAuthGuard) // 🔑 Aplica a checagem do Cookie!
   @Get('dashboard')
   async getDashboard() {
-    // REMOVEMOS @Headers('x-master-key') masterKey: string
-    // Por enquanto, deixaremos a checagem no validateKey, mas o correto é um GUARD.
-    // 🚨 TEMPORARIAMENTE: Se você não implementou um Guard/Middleware de Cookie:
-    // Esta rota VAI FALHAR porque o validateKey não está sendo mais chamado com o Header,
-    // mas sim com o Cookie.
-
-    // Para ser mais seguro e correto, você PRECISA de um NestJS Guard
-    // que checa o cookie 'master_session'.
-
-    // **ASSUMINDO que você criará um Guard que checa o cookie e lança UnauthorizedException,
-    // a rota final deve parecer assim:**
-
-    // [CÓDIGO IDEAL FINAL]
-    // @UseGuards(MasterSessionGuard) // <-- Novo Guard de Cookie
-    // async getDashboard() {
-    //     return this.superService.getDashboardData();
-    // }
-
-    // Se não puder criar o Guard agora: use o código original, mas saiba que está inseguro.
-
+    // A execução só chega aqui se o MasterAuthGuard retornar TRUE (cookie validado)
     return this.superService.getDashboardData();
   }
 
   @Post('onboard')
-  async createClient(
-    @Body() body: any,
-    @Headers('x-master-key') masterKey: string,
-  ) {
-    this.validateMasterKey(masterKey);
-    // ... (restante do código)
+  @UseGuards(MasterAuthGuard) // Protegemos a criação de clientes com o cookie
+  async createClient(@Body() body: any) {
+    // A validação da chave Master é feita pelo Guard
+    // Se precisar da masterKey aqui para alguma lógica interna, você pode obtê-la.
     return this.superService.onboardClient(body);
   }
 }
