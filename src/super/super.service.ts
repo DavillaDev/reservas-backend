@@ -1,3 +1,5 @@
+// src/super/super.service.ts (FINAL E CORRIGIDO PARA ONBOARDING DE CONFIGURAÇÕES)
+
 import {
   Injectable,
   ConflictException,
@@ -6,12 +8,14 @@ import {
 import { PrismaService } from '../prisma.service';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+// 🔑 NOVA IMPORTAÇÃO: O DTO de Onboarding
+import { OnboardClubDto } from './dto/onboard-club.dto';
+import { classToPlain } from 'class-transformer'; // 🔑 Importar para lidar com Prisma JSON
 
 @Injectable()
 export class SuperService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) {} // 1. DASHBOARD GERAL
 
-  // 1. DASHBOARD GERAL
   async getDashboardData() {
     const nightclubs = await this.prisma.nightclub.findMany({
       include: {
@@ -62,19 +66,15 @@ export class SuperService {
       },
       clubs: formattedClubs,
     };
-  }
+  } // 2. CRIAR CLIENTE (ONBOARDING)
 
-  // 2. CRIAR CLIENTE
-  async onboardClient(data: any) {
-    if (!data || typeof data !== 'object') {
-      throw new BadRequestException('Payload inválido');
-    }
+  async onboardClient(data: OnboardClubDto) {
+    // 🔑 1. Desestruturamos incluindo o campo settings
+    const { clubName, slug, ownerName, ownerEmail, ownerPassword, settings } =
+      data;
 
-    const { clubName, slug, ownerName, ownerEmail, ownerPassword } = data;
-
-    if (!clubName || !slug || !ownerEmail || !ownerPassword) {
-      throw new BadRequestException('Dados obrigatórios ausentes');
-    }
+    // As validações de DTO garantem que os campos estão presentes, eliminando
+    // a necessidade da validação manual de 'Payload inválido' e 'Dados obrigatórios ausentes'
 
     const existingUser = await this.prisma.user.findUnique({
       where: { email: ownerEmail },
@@ -92,7 +92,13 @@ export class SuperService {
       throw new ConflictException('Já existe uma balada com esse slug/link.');
     }
 
-    const hashedPassword = await bcrypt.hash(ownerPassword, 10);
+    const hashedPassword = await bcrypt.hash(ownerPassword, 10); // 🔑 2. Preparamos o objeto 'settings' para o Prisma
+
+    let clubSettings: any = {};
+    if (settings) {
+      // Usa classToPlain para transformar a instância do DTO em um objeto JSON puro
+      clubSettings = classToPlain(settings);
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const nightclub = await tx.nightclub.create({
@@ -100,7 +106,8 @@ export class SuperService {
           name: clubName,
           slug,
           whatsapp: '',
-          themeColor: '#ff8c00',
+          themeColor: '#ff8c00', // 🔑 3. Incluímos as configurações de Split/JSON
+          settings: clubSettings,
         },
       });
 
