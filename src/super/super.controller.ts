@@ -5,6 +5,7 @@ import {
   Body,
   Headers,
   UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
 import { SuperService } from './super.service';
 
@@ -12,11 +13,18 @@ import { SuperService } from './super.service';
 export class SuperController {
   constructor(private readonly superService: SuperService) {}
 
-  // Validação simples de chave
-  private validateKey(key: string) {
-    const validKey = process.env.MASTER_KEY || 'segredo123';
-    if (key !== validKey) {
-      throw new UnauthorizedException('Sai daqui, curioso! 🚫');
+  // Validação centralizada e segura
+  private validateKey(masterKey?: string) {
+    if (!masterKey) {
+      throw new UnauthorizedException('Master key ausente');
+    }
+
+    if (!process.env.MASTER_KEY) {
+      throw new Error('MASTER_KEY não configurada no ambiente');
+    }
+
+    if (masterKey !== process.env.MASTER_KEY) {
+      throw new UnauthorizedException('Master key inválida');
     }
   }
 
@@ -26,6 +34,11 @@ export class SuperController {
     @Headers('x-master-key') masterKey: string,
   ) {
     this.validateKey(masterKey);
+
+    if (!body || typeof body !== 'object') {
+      throw new BadRequestException('Payload inválido');
+    }
+
     return this.superService.onboardClient(body);
   }
 

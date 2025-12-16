@@ -1,4 +1,8 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
@@ -7,15 +11,14 @@ import * as bcrypt from 'bcrypt';
 export class SuperService {
   constructor(private prisma: PrismaService) {}
 
-  // 1. DASHBOARD GERAL (Novo)
+  // 1. DASHBOARD GERAL
   async getDashboardData() {
-    // Busca todas as baladas e suas reservas
     const nightclubs = await this.prisma.nightclub.findMany({
       include: {
-        _count: { select: { reservations: true } }, // Conta reservas
+        _count: { select: { reservations: true } },
         reservations: {
           where: { status: 'CONFIRMED' },
-          select: { amount: true }, // Pega valor pra somar
+          select: { amount: true },
         },
         users: {
           where: { role: 'OWNER' },
@@ -25,13 +28,12 @@ export class SuperService {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Calcula Totais Globais
     let totalRevenue = 0;
     let totalReservations = 0;
 
     const formattedClubs = nightclubs.map((club) => {
       const clubRevenue = club.reservations.reduce(
-        (acc, curr) => acc + (Number(curr.amount) || 0),
+        (acc, curr) => acc + Number(curr.amount || 0),
         0,
       );
 
@@ -45,7 +47,7 @@ export class SuperService {
         owner: club.users[0]
           ? `${club.users[0].name} (${club.users[0].email})`
           : 'Sem Dono',
-          users: club.users,
+        users: club.users,
         revenue: clubRevenue,
         reservationsCount: club._count.reservations,
         createdAt: club.createdAt,
@@ -62,21 +64,33 @@ export class SuperService {
     };
   }
 
-  // 2. CRIAR CLIENTE (O que já existia)
+  // 2. CRIAR CLIENTE
   async onboardClient(data: any) {
+    if (!data || typeof data !== 'object') {
+      throw new BadRequestException('Payload inválido');
+    }
+
     const { clubName, slug, ownerName, ownerEmail, ownerPassword } = data;
+
+    if (!clubName || !slug || !ownerEmail || !ownerPassword) {
+      throw new BadRequestException('Dados obrigatórios ausentes');
+    }
 
     const existingUser = await this.prisma.user.findUnique({
       where: { email: ownerEmail },
     });
-    if (existingUser)
+
+    if (existingUser) {
       throw new ConflictException('Já existe um usuário com esse email.');
+    }
 
     const existingClub = await this.prisma.nightclub.findUnique({
       where: { slug },
     });
-    if (existingClub)
+
+    if (existingClub) {
       throw new ConflictException('Já existe uma balada com esse slug/link.');
+    }
 
     const hashedPassword = await bcrypt.hash(ownerPassword, 10);
 
@@ -84,7 +98,7 @@ export class SuperService {
       const nightclub = await tx.nightclub.create({
         data: {
           name: clubName,
-          slug: slug,
+          slug,
           whatsapp: '',
           themeColor: '#ff8c00',
         },
@@ -93,7 +107,7 @@ export class SuperService {
       const user = await tx.user.create({
         data: {
           email: ownerEmail,
-          name: ownerName,
+          name: ownerName || 'Admin',
           password: hashedPassword,
           role: UserRole.OWNER,
           nightclubId: nightclub.id,
