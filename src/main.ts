@@ -25,9 +25,10 @@ async function bootstrap() {
   app.use(cookieParser());
 
   const allowedOrigins: string[] = [
-    'http://localhost:3000',
+    'https://reservasclub.com.br', // ✅ Seu novo domínio
+    'https://www.reservasclub.com.br', // ✅ Versão com WWW
+    'https://reservas-two-alpha.vercel.app', // ✅ Domínio antigo/Vercel
     'http://localhost:3001',
-    'https://reservas-two-alpha.vercel.app',
   ];
 
   if (process.env.FRONTEND_URL) {
