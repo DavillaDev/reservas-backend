@@ -154,9 +154,8 @@ export class ReservationsService {
   // 4. GERAR OU RECUPERAR PIX (BLOQUEIA RESET DE TIMER)
   // ===========================================================================
   async generatePix(reservationId: string) {
-    console.log(
-      `[RESERVATION_START] 🚀 Iniciando processo para ID: ${reservationId}`,
-    );
+    console.log('================ PIX FLOW START ================');
+    console.log('🔎 Reservation ID:', reservationId);
 
     const reservation = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
@@ -164,167 +163,84 @@ export class ReservationsService {
     });
 
     if (!reservation) {
-      console.error(
-        `[FATAL_ERROR] ❌ Reserva ${reservationId} não encontrada no banco.`,
-      );
+      console.error('❌ Reserva não encontrada');
       throw new NotFoundException('Reserva não encontrada');
     }
 
-    const settings = (reservation.nightclub.settings as any) || {};
-    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+    const settings = reservation.nightclub.settings as any;
 
-    console.log(
-      `[CONFIG_CHECK] 🔑 Token Plataforma: ${platformToken?.substring(0, 15)}...`,
-    );
-    console.log(
-      `[CONFIG_CHECK] 🎯 ID da Balada (Target): ${settings.mpAccountId || 'NÃO CONFIGURADO'}`,
-    );
-
-    const client = new MercadoPagoConfig({ accessToken: platformToken });
-    const payment = new Payment(client);
-
-    try {
-      // 1. LÓGICA DE RECUPERAÇÃO (TIMER PERSISTENTE)
-      if (
-        reservation.paymentId &&
-        reservation.paymentDeadline &&
-        new Date(reservation.paymentDeadline) > new Date()
-      ) {
-        console.log(
-          `[RECOVERY] 🔄 Tentando recuperar pagamento existente: ${reservation.paymentId}`,
-        );
-        try {
-          const existing = await payment.get({ id: reservation.paymentId });
-          console.log(
-            `[RECOVERY_STATUS] ℹ️ Status atual no MP: ${existing.status}`,
-          );
-
-          if (existing.status === 'pending') {
-            console.log(
-              `[RECOVERY_SUCCESS] ✅ Reaproveitando PIX ativo para evitar reset de timer.`,
-            );
-            return {
-              qrCodeBase64:
-                existing.point_of_interaction?.transaction_data?.qr_code_base64,
-              pixCode: existing.point_of_interaction?.transaction_data?.qr_code,
-              paymentId: existing.id,
-              amount: reservation.amount,
-              expiresAt: reservation.paymentDeadline,
-            };
-          }
-        } catch (e) {
-          console.warn(
-            `[RECOVERY_FAILED] ⚠️ Erro ao buscar pagamento antigo, gerando novo...`,
-            e.message,
-          );
-        }
-      }
-
-      // 2. PREPARAÇÃO DO NOVO PAGAMENTO
-      const expiresAtDate = addMinutes(new Date(), 20);
-      const amount = Number(reservation.amount || reservation.space.price || 0);
-      const appFee = parseFloat(
-        ((amount * (settings.appFeePercent || 0)) / 100).toFixed(2),
-      );
-
-      console.log(
-        `[CALC] 💰 Valor Total: ${amount} | Taxa App (${settings.appFeePercent}%): ${appFee}`,
-      );
-
-      const paymentBody: any = {
-        transaction_amount: amount,
-        description: `Reserva: ${reservation.nightclub.name} - ID: ${reservation.id}`,
-        payment_method_id: 'pix',
-
-        payer: {
-          email: reservation.customerEmail || 'cliente@email.com',
-          first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
-        },
-
-        notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
-        date_of_expiration: expiresAtDate.toISOString(),
-        external_reference: reservation.id,
-
-        // 🔥 ISTO DEFINE O DONO DO PIX
-        collector_id: Number(settings.mpAccountId),
-
-        // opcional
-        application_fee: appFee > 0 ? appFee : undefined,
-      };
-
-      const requestOptions: any = {
-        headers: {
-          'X-Idempotency-Key': `pix-${reservation.id}-${Date.now()}`, // Evita duplicidade
-        },
-      };
-
-      // 3. APLICAÇÃO DO SPLIT (CRÍTICO)
-      if (settings.mpAccountId) {
-        console.log(
-          `[SPLIT_MODE] 🛠️ Configurando Target-App-Id: ${settings.mpAccountId}`,
-        );
-        paymentBody.application_fee = appFee > 0 ? appFee : undefined;
-        requestOptions.headers['X-Target-App-Id'] =
-          settings.mpAccountId.toString();
-
-        console.log(
-          `[SPLIT_PAYLOAD] 📝 Headers:`,
-          JSON.stringify(requestOptions.headers),
-        );
-        console.log(`[SPLIT_PAYLOAD] 📝 Fee: ${paymentBody.application_fee}`);
-      } else {
-        console.warn(
-          `[WARNING] ⚠️ mpAccountId ausente. O dinheiro cairá na conta da PLATAFORMA.`,
-        );
-      }
-
-      console.log(`[MP_REQUEST] 📤 Enviando requisição para o Mercado Pago...`);
-
-      const response = await payment.create({
-        body: paymentBody,
-        ...requestOptions,
-      });
-
-      console.log(`[MP_RESPONSE] 📥 Sucesso! ID Gerado: ${response.id}`);
-      console.log(
-        `[MP_RESPONSE] 📥 Merchant Account ID (Quem recebe): ${response.collector_id}`,
-      );
-
-      // 4. ATUALIZAÇÃO NO BANCO
-      await this.prisma.reservation.update({
-        where: { id: reservationId },
-        data: {
-          paymentId: response.id?.toString(),
-          paymentDeadline: expiresAtDate,
-          status: 'PENDING',
-        },
-      });
-
-      console.log(`[DATABASE_UPDATE] ✅ Reserva atualizada com sucesso.`);
-
-      return {
-        qrCodeBase64:
-          response.point_of_interaction?.transaction_data?.qr_code_base64,
-        pixCode: response.point_of_interaction?.transaction_data?.qr_code,
-        paymentId: response.id,
-        amount,
-        expiresAt: expiresAtDate,
-      };
-    } catch (error: any) {
-      console.error(`[FATAL_ERROR] 🔥 Erro na integração Mercado Pago!`);
-      if (error.response?.data) {
-        console.error(
-          `[MP_ERROR_DETAILS] 📋 Body do Erro:`,
-          JSON.stringify(error.response.data, null, 2),
-        );
-      } else {
-        console.error(`[ERROR_MESSAGE] 📋:`, error.message);
-      }
+    if (!settings?.mpAccessToken) {
+      console.error('❌ Balada sem Mercado Pago conectado');
       throw new BadRequestException(
-        'Falha na comunicação com o provedor de pagamento.',
+        'Esta balada não possui Mercado Pago conectado',
       );
     }
+
+    const amount = Number(reservation.amount || reservation.space.price || 0);
+    const expiresAtDate = addMinutes(new Date(), 20);
+
+    console.log('💰 Valor:', amount);
+    console.log('🔑 Gerando PIX com TOKEN DA BALADA');
+
+    const client = new MercadoPagoConfig({
+      accessToken: settings.mpAccessToken,
+    });
+
+    const payment = new Payment(client);
+
+    // 🔥 CORREÇÃO AQUI: email nunca pode ser null
+    const payerEmail =
+      reservation.customerEmail && reservation.customerEmail.trim() !== ''
+        ? reservation.customerEmail
+        : 'cliente@pix.com';
+
+    const paymentBody = {
+      transaction_amount: amount,
+      payment_method_id: 'pix',
+      description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
+
+      payer: {
+        email: payerEmail, // ✅ string garantida
+        first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
+      },
+
+      notification_url:
+        'https://reservas-backend-fa4b.onrender.com/reservations/webhook',
+
+      date_of_expiration: expiresAtDate.toISOString(),
+      external_reference: reservation.id,
+    };
+
+    console.log('📦 Payment Body:', paymentBody);
+    console.log('🚀 Enviando para Mercado Pago...');
+
+    const response = await payment.create({ body: paymentBody });
+
+    console.log('✅ PIX CRIADO COM SUCESSO');
+    console.log('🧾 Payment ID:', response.id);
+    console.log('🏦 Conta recebedora (collector):', response.collector_id);
+
+    await this.prisma.reservation.update({
+      where: { id: reservationId },
+      data: {
+        paymentId: response.id?.toString(),
+        paymentDeadline: expiresAtDate,
+        status: 'PENDING',
+      },
+    });
+
+    console.log('================ PIX FLOW END ==================');
+
+    return {
+      qrCodeBase64:
+        response.point_of_interaction?.transaction_data?.qr_code_base64,
+      pixCode: response.point_of_interaction?.transaction_data?.qr_code,
+      paymentId: response.id,
+      expiresAt: expiresAtDate,
+      amount,
+    };
   }
+
   // ===========================================================================
   // 5. WEBHOOK
   // ===========================================================================

@@ -9,7 +9,7 @@ import {
   Query,
   HttpCode,
   NotFoundException,
-  UseGuards, // Adicionado para proteger rotas críticas
+  UseGuards, // Adicionado para proteger rotascríticas
 } from '@nestjs/common';
 import { ReservationsService } from './reservations.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
@@ -38,10 +38,8 @@ export class ReservationsController {
   ) {
     return this.reservationsService.findAll(date, nightclubId);
   }
-
   // ===========================================================================
-  // 3. CHECKOUT (Alimenta a tela de pagamento)
-  // ===========================================================================
+  // 3. CHECKOUT (Alimenta a tela de pagamento)  // ===========================================================================
   @Get(':id/checkout')
   async getCheckoutData(@Param('id') id: string) {
     return this.reservationsService.getCheckoutData(id);
