@@ -1,5 +1,3 @@
-// api/src/nightclubs/nightclubs.controller.ts
-
 import {
   Controller,
   Get,
@@ -17,14 +15,12 @@ import { CreateNightclubDto } from './dto/create-nightclub.dto';
 import { UpdateNightclubDto } from './dto/update-nightclub.dto';
 import { MasterAuthGuard } from '../super/guards/master-auth.guard';
 
-// URL do seu Frontend na Vercel para redirecionamentos
+// 🛡️ Certifique-se que esta URL é exatamente a do seu Admin na Vercel
 const FRONTEND_URL = 'https://reservas-two-alpha.vercel.app';
 
 @Controller('nightclubs')
 export class NightclubsController {
   constructor(private readonly nightclubsService: NightclubsService) {}
-
-  // --- ROTAS PROTEGIDAS APENAS PELO MASTER ADMIN (Plataforma) ---
 
   @UseGuards(MasterAuthGuard)
   @Post()
@@ -44,10 +40,6 @@ export class NightclubsController {
     return this.nightclubsService.remove(id);
   }
 
-  // --- ROTAS ACESSÍVEIS PELO ADMIN LOCAL (DONO DA BALADA) ---
-
-  // 🛡️ CORREÇÃO: Removido MasterAuthGuard para permitir que a balada se atualize.
-  // A segurança de "quem pode editar o que" deve estar no Service.
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -67,22 +59,23 @@ export class NightclubsController {
   }
 
   // =========================================================
-  // 🔑 OAUTH MP CONNECT: INICIAR CONEXÃO
+  // 🔑 INICIAR CONEXÃO OAUTH MP
   // =========================================================
   @Get('connect/:id')
   async startMpConnect(@Param('id') nightclubId: string, @Res() res: any) {
     try {
+      console.log(`🚀 Iniciando conexão MP para balada: ${nightclubId}`);
       const redirectUrl =
         await this.nightclubsService.generateMpConnectUrl(nightclubId);
       return res.redirect(redirectUrl);
     } catch (error) {
-      console.error('Erro ao gerar URL MP:', error);
+      console.error('❌ Erro ao gerar URL MP:', error);
       return res.redirect(`${FRONTEND_URL}/admin/settings?error=mp_url_failed`);
     }
   }
 
   // =========================================================
-  // 🔑 OAUTH MP CONNECT: CALLBACK (Retorno do Mercado Pago)
+  // 🔑 CALLBACK (Onde o Mercado Pago te devolve o CODE)
   // =========================================================
   @Get('mp-callback')
   async handleMpCallback(
@@ -90,23 +83,32 @@ export class NightclubsController {
     @Query('state') nightclubId: string,
     @Res() res: any,
   ) {
-    // 🛡️ Validação de segurança básica
+    console.log('🔔 Callback MP recebido!', {
+      code: code?.substring(0, 10) + '...',
+      nightclubId,
+    });
+
     if (!code || !nightclubId) {
+      console.error('❌ Code ou NightclubID ausentes no callback');
       return res.redirect(
         `${FRONTEND_URL}/admin/settings?error=mp_auth_failed`,
       );
     }
 
     try {
-      // O Service troca o 'code' por 'access_token' e salva no banco
+      // O segredo está aqui: Se o Service falhar, ele cai no catch.
       await this.nightclubsService.handleMpCallback(code, nightclubId);
 
-      // ✅ Redireciona para o painel da Vercel com sucesso
+      console.log('✅ Conexão MP finalizada com sucesso!');
       return res.redirect(
         `${FRONTEND_URL}/admin/settings?success=mp_connected`,
       );
     } catch (error) {
-      console.error('Erro no Callback do MP:', error);
+      // 🚨 Se cair aqui, precisamos olhar o log do Render para ver o erro do Service
+      console.error(
+        '❌ Erro fatal no handleMpCallback do Controller:',
+        error.message,
+      );
       return res.redirect(
         `${FRONTEND_URL}/admin/settings?error=mp_token_exchange_failed`,
       );

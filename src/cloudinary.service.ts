@@ -5,6 +5,7 @@ const toStream = require('buffer-to-stream');
 @Injectable()
 export class CloudinaryService {
   constructor() {
+    console.log('Cloud Name:', process.env.CLOUDINARY_CLOUD_NAME);
     // 🛡️ Usando as variáveis que você definiu no Render
     cloudinary.config({
       cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
