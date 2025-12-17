@@ -162,31 +162,19 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const amount = Number(reservation.amount || reservation.space.price || 0);
 
-    // 🔑 O Token deve ser o da PLATAFORMA para operar como Marketplace
-    const platformAccessToken = this.configService.get(
-      'MP_PLATFORM_ACCESS_TOKEN',
-    );
+    // 🔑 DEFINIÇÃO DO TOKEN: Prioridade para o da Balada (OAuth)
+    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+    const activeToken = settings.mpAccessToken || platformToken;
 
-    if (!platformAccessToken) {
-      throw new BadRequestException(
-        'Token de plataforma não configurado no Render.',
-      );
+    if (!activeToken) {
+      throw new BadRequestException('Token de pagamento não configurado.');
     }
 
-    const client = new MercadoPagoConfig({ accessToken: platformAccessToken });
+    const client = new MercadoPagoConfig({ accessToken: activeToken });
     const payment = new Payment(client);
     const expiresAtDate = addMinutes(new Date(), 15);
 
     try {
-      // Cálculo da Taxa (Application Fee)
-      const appFeePercent = Number(settings?.appFeePercent || 0);
-      let applicationFee = 0;
-      if (appFeePercent > 0) {
-        applicationFee = parseFloat(
-          ((amount * appFeePercent) / 100).toFixed(2),
-        );
-      }
-
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
@@ -195,36 +183,22 @@ export class ReservationsService {
           email: reservation.customerEmail || 'cliente@email.com',
           first_name: reservation.customerName.split(' ')[0],
         },
+        // 🔔 URL de Notificação (Sempre a do seu backend)
         notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
       };
 
-      // 🛡️ DEFINIÇÃO DO HEADER DE SPLIT
-      const requestOptions: any = {};
+      // 🛡️ REMOVEMOS o application_fee por enquanto para garantir a aprovação.
+      // O MP bloqueia taxas se a conta de Marketplace não estiver 100% validada.
+      // O dinheiro cairá 100% na conta da balada se o token for dela.
 
-      if (settings.mpAccountId) {
-        // O dinheiro vai para a balada, e você retém a application_fee
-        if (applicationFee > 0) {
-          paymentBody.application_fee = applicationFee;
-        }
+      console.log(
+        `💳 Gerando PIX via conta: ${settings.mpAccessToken ? 'DA BALADA' : 'DA PLATAFORMA'}`,
+      );
 
-        // CORREÇÃO: A SDK v2 espera 'headers' dentro de requestOptions
-        requestOptions.headers = {
-          'X-Target-App-Id': settings.mpAccountId.toString(),
-        };
+      const response = await payment.create({ body: paymentBody });
 
-        console.log(
-          `💰 [SPLIT] Criando pagamento para conta: ${settings.mpAccountId} com taxa de R$ ${applicationFee}`,
-        );
-      }
-
-      const response = await payment.create({
-        body: paymentBody,
-        ...requestOptions, // Espalha headers se existirem
-      });
-
-      // Salva os dados do pagamento no banco
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -244,11 +218,11 @@ export class ReservationsService {
       };
     } catch (error: any) {
       console.error(
-        '❌ ERRO NO MERCADO PAGO:',
+        '❌ ERRO MERCADO PAGO:',
         error.response?.data || error.message,
       );
       throw new BadRequestException(
-        'Erro ao gerar PIX. Verifique as permissões da conta vinculada.',
+        'Erro ao gerar PIX. Tente novamente em instantes.',
       );
     }
   }
