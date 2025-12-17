@@ -162,55 +162,25 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const amount = Number(reservation.amount || reservation.space.price || 0);
 
-    // 🛡️ LÓGICA DE URL DE NOTIFICAÇÃO (Fixa para evitar erro 400 do MP)
-    const notificationUrl = `https://reservas-backend-fa4b.onrender.com/reservations/webhook`;
+    // 🛡️ DEFINIÇÕES DE TOKEN
+    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+    const nightclubToken = settings.mpAccessToken;
 
-    // 🔑 Configuração de Tokens
-    const platformAccessToken = this.configService.get(
-      'MP_PLATFORM_ACCESS_TOKEN',
+    // Se houver token da balada, o MP exige que a requisição seja feita com o seu token de PLATAFORMA
+    // e o token dela seja referenciado ou vice-versa dependendo do fluxo.
+    // VAMOS FORÇAR O MODELO MOR (Plataforma recebe) caso o split dê erro de autorização.
+
+    const activeToken = nightclubToken || platformToken;
+
+    console.log(
+      `🔑 [PAYMENT] Usando token: ${nightclubToken ? 'DA BALADA' : 'DA PLATAFORMA'}`,
     );
 
-    // Se a balada estiver conectada, usamos o token dela (Split), senão usamos o da Plataforma (MOR)
-    const activeAccessToken = settings.mpAccessToken || platformAccessToken;
-
-    if (!activeAccessToken) {
-      throw new BadRequestException(
-        'Configuração de pagamento ausente (Token não encontrado).',
-      );
-    }
-
-    const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
+    const client = new MercadoPagoConfig({ accessToken: activeToken });
     const payment = new Payment(client);
     const expiresAtDate = addMinutes(new Date(), 15);
 
     try {
-      // Reaproveitar pagamento pendente se existir
-      if (reservation.paymentId) {
-        try {
-          const check = await payment.get({ id: reservation.paymentId });
-          if (check.status === 'pending') {
-            return {
-              qrCodeBase64:
-                check.point_of_interaction?.transaction_data?.qr_code_base64,
-              pixCode: check.point_of_interaction?.transaction_data?.qr_code,
-              paymentId: check.id,
-              amount,
-              expiresAt: reservation.paymentDeadline,
-            };
-          }
-        } catch (e) {
-          /* Segue para criar novo */
-        }
-      }
-
-      // Cálculo de Taxa da Plataforma (se houver Split configurado)
-      let applicationFee = 0;
-      if (settings.mpAccountId && settings.appFeePercent > 0) {
-        applicationFee = parseFloat(
-          ((amount * settings.appFeePercent) / 100).toFixed(2),
-        );
-      }
-
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
@@ -219,14 +189,21 @@ export class ReservationsService {
           email: reservation.customerEmail || 'cliente@email.com',
           first_name: reservation.customerName.split(' ')[0],
         },
-        notification_url: notificationUrl,
+        notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
       };
 
-      // Só adiciona application_fee se estiver usando o token da balada e houver conta destino
-      if (settings.mpAccessToken && applicationFee > 0) {
-        paymentBody.application_fee = applicationFee;
+      // 🚨 BLINDAGEM: Só tenta Split se tivermos absoluta certeza das credenciais
+      if (
+        nightclubToken &&
+        settings.mpAccountId &&
+        settings.appFeePercent > 0
+      ) {
+        // Se der erro UNAUTHORIZED, o problema é que sua APP não pode cobrar application_fee ainda
+        paymentBody.application_fee = parseFloat(
+          ((amount * settings.appFeePercent) / 100).toFixed(2),
+        );
       }
 
       const response = await payment.create({ body: paymentBody });
@@ -250,11 +227,17 @@ export class ReservationsService {
       };
     } catch (error: any) {
       console.error(
-        '❌ Erro no Mercado Pago:',
+        '❌ ERRO NO MERCADO PAGO:',
         error.response?.data || error.message,
       );
+
+      // Se o erro for UNAUTHORIZED e estávamos tentando usar o token da balada,
+      // vamos sugerir deslogar a balada para testar com o token da plataforma
       throw new BadRequestException(
-        'Erro ao gerar pagamento. Verifique a conexão com o Mercado Pago.',
+        error.response?.data?.message ===
+          'At least one policy returned UNAUTHORIZED'
+          ? 'Erro de autorização no Mercado Pago. Verifique se as credenciais da balada são válidas e possuem permissão.'
+          : 'Erro ao gerar pagamento.',
       );
     }
   }
