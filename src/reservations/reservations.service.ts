@@ -235,13 +235,21 @@ export class ReservationsService {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ID: ${reservation.id}`,
         payment_method_id: 'pix',
+
         payer: {
           email: reservation.customerEmail || 'cliente@email.com',
           first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
         },
+
         notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
+
+        // 🔥 ISTO DEFINE O DONO DO PIX
+        collector_id: Number(settings.mpAccountId),
+
+        // opcional
+        application_fee: appFee > 0 ? appFee : undefined,
       };
 
       const requestOptions: any = {
