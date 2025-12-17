@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config'; // 👈 ADICIONE ESTA LINHA
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaService } from './prisma.service';
@@ -15,16 +16,20 @@ import { CloudinaryService } from './cloudinary.service';
 import { SuperController } from './super/super.controller';
 import { SuperService } from './super/super.service';
 
-// 🚨 IMPORTANTE: Importar o Controller de Nightclubs para registrar as rotas de Callback
-import { NightclubsController } from './nightclubs/nightclubs.controller';
-
 @Module({
-  imports: [NightclubsModule, SpacesModule, ReservationsModule, AuthModule],
+  imports: [
+    // 🛡️ Inicializa o ConfigModule globalmente para todos os outros módulos
+    ConfigModule.forRoot({ isGlobal: true }),
+    NightclubsModule,
+    SpacesModule,
+    ReservationsModule,
+    AuthModule,
+  ],
   controllers: [
     AppController,
     UploadController,
     SuperController,
-    NightclubsController,
+    // ❌ NightclubsController removido daqui para evitar o erro de dependência (UnknownDependencies)
   ],
   providers: [AppService, PrismaService, SuperService, CloudinaryService],
 })
