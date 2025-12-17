@@ -152,53 +152,142 @@ export class ReservationsService {
   // 4. GERAR PIX (COM LÓGICA DE SPLIT E WEBHOOK SEGURO)
   // ===========================================================================
   async generatePix(reservationId: string) {
+    console.log('================ PIX FLOW START ================');
+    console.log('🔎 Reservation ID:', reservationId);
+
+    // =========================================================
+    // 1️⃣ BUSCAR RESERVA
+    // =========================================================
     const reservation = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
       include: { nightclub: true, space: true },
     });
 
-    if (!reservation) throw new NotFoundException('Reserva não encontrada');
-
-    const settings = (reservation.nightclub.settings as any) || {};
-    const amount = Number(reservation.amount || reservation.space.price || 0);
-
-    // 🔑 DEFINIÇÃO DO TOKEN: Prioridade para o da Balada (OAuth)
-    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-    const activeToken = settings.mpAccessToken || platformToken;
-
-    if (!activeToken) {
-      throw new BadRequestException('Token de pagamento não configurado.');
+    if (!reservation) {
+      console.error('❌ Reserva não encontrada');
+      throw new NotFoundException('Reserva não encontrada');
     }
 
-    const client = new MercadoPagoConfig({ accessToken: activeToken });
+    console.log('✅ Reserva encontrada:', {
+      id: reservation.id,
+      nightclub: reservation.nightclub.name,
+      space: reservation.space?.name,
+    });
+
+    // =========================================================
+    // 2️⃣ VALORES E SETTINGS
+    // =========================================================
+    const settings = (reservation.nightclub.settings as any) || {};
+    const amount = Number(reservation.amount || reservation.space?.price || 0);
+
+    console.log('💰 Valor calculado:', amount);
+
+    if (!amount || amount <= 0) {
+      console.error('❌ Valor inválido para PIX');
+      throw new BadRequestException('Valor inválido para pagamento');
+    }
+
+    // =========================================================
+    // 3️⃣ DEFINIÇÃO DO TOKEN
+    // =========================================================
+    const platformToken = this.configService.get<string>(
+      'MP_PLATFORM_ACCESS_TOKEN',
+    );
+    const nightclubToken = settings.mpAccessToken;
+
+    const activeToken = nightclubToken || platformToken;
+
+    console.log('🔑 Token selecionado:', {
+      origem: nightclubToken ? 'CONTA DA BALADA (OAuth)' : 'PLATAFORMA',
+      existeTokenBalada: !!nightclubToken,
+      existeTokenPlataforma: !!platformToken,
+    });
+
+    if (!activeToken) {
+      console.error('❌ Nenhum token disponível');
+      throw new BadRequestException('Token de pagamento não configurado');
+    }
+
+    // =========================================================
+    // 4️⃣ IDENTIDADE REAL DO TOKEN (PROVA ABSOLUTA)
+    // =========================================================
+    let mpUser: any;
+
+    try {
+      const me = await fetch('https://api.mercadopago.com/users/me', {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+        },
+      });
+
+      mpUser = await me.json();
+
+      console.log('🧠 MP USERS/ME:', {
+        id: mpUser.id,
+        email: mpUser.email,
+        site_id: mpUser.site_id,
+        type: mpUser.type,
+      });
+    } catch (err) {
+      console.error('❌ Falha ao validar token no /users/me', err);
+      throw new BadRequestException('Token Mercado Pago inválido');
+    }
+
+    // =========================================================
+    // 5️⃣ CLIENTE MP
+    // =========================================================
+    const client = new MercadoPagoConfig({
+      accessToken: activeToken,
+    });
+
     const payment = new Payment(client);
     const expiresAtDate = addMinutes(new Date(), 15);
 
+    console.log('⏰ Expiração PIX:', expiresAtDate.toISOString());
+
+    // =========================================================
+    // 6️⃣ PAYLOAD DO PAGAMENTO (EXPLÍCITO)
+    // =========================================================
+    const paymentBody: any = {
+      transaction_amount: amount,
+      description: `Reserva: ${reservation.nightclub.name} - ${reservation.space?.name}`,
+      payment_method_id: 'pix',
+
+      payer: {
+        email: reservation.customerEmail || 'cliente@email.com',
+        first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
+        entity_type: 'individual',
+      },
+
+      notification_url:
+        'https://reservas-backend-fa4b.onrender.com/reservations/webhook',
+
+      date_of_expiration: expiresAtDate.toISOString(),
+      external_reference: reservation.id,
+
+      // 🔒 MARKETPLACE BLINDADO
+      application_fee: 0,
+    };
+
+    console.log('📦 Payment Body FINAL:', JSON.stringify(paymentBody, null, 2));
+
+    // =========================================================
+    // 7️⃣ CRIAÇÃO DO PIX
+    // =========================================================
     try {
-      const paymentBody: any = {
-        transaction_amount: amount,
-        description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
-        payment_method_id: 'pix',
-        payer: {
-          email: reservation.customerEmail || 'cliente@email.com',
-          first_name: reservation.customerName.split(' ')[0],
-        },
-        // 🔔 URL de Notificação (Sempre a do seu backend)
-        notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
-        date_of_expiration: expiresAtDate.toISOString(),
-        external_reference: reservation.id,
-      };
-
-      // 🛡️ REMOVEMOS o application_fee por enquanto para garantir a aprovação.
-      // O MP bloqueia taxas se a conta de Marketplace não estiver 100% validada.
-      // O dinheiro cairá 100% na conta da balada se o token for dela.
-
-      console.log(
-        `💳 Gerando PIX via conta: ${settings.mpAccessToken ? 'DA BALADA' : 'DA PLATAFORMA'}`,
-      );
+      console.log('🚀 Enviando request para Mercado Pago...');
 
       const response = await payment.create({ body: paymentBody });
 
+      console.log('✅ PIX CRIADO COM SUCESSO:', {
+        paymentId: response.id,
+        status: response.status,
+        qrGerado: !!response.point_of_interaction?.transaction_data?.qr_code,
+      });
+
+      // =========================================================
+      // 8️⃣ ATUALIZA RESERVA
+      // =========================================================
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -207,6 +296,8 @@ export class ReservationsService {
           status: 'PENDING',
         },
       });
+
+      console.log('💾 Reserva atualizada com pagamento');
 
       return {
         qrCodeBase64:
@@ -217,13 +308,19 @@ export class ReservationsService {
         expiresAt: expiresAtDate,
       };
     } catch (error: any) {
+      console.error('❌ ERRO MERCADO PAGO — PAYMENTS CREATE');
+      console.error('📛 STATUS:', error?.status);
+      console.error('📛 MESSAGE:', error?.message);
       console.error(
-        '❌ ERRO MERCADO PAGO:',
-        error.response?.data || error.message,
+        '📛 RESPONSE DATA:',
+        JSON.stringify(error?.response?.data, null, 2),
       );
+
       throw new BadRequestException(
-        'Erro ao gerar PIX. Tente novamente em instantes.',
+        'Erro ao gerar PIX. Verifique a conta Mercado Pago conectada.',
       );
+    } finally {
+      console.log('================ PIX FLOW END ==================');
     }
   }
 
