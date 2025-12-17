@@ -8,26 +8,24 @@ import { ReservationsModule } from './reservations/reservations.module';
 import { AuthModule } from './auth/auth.module';
 import { UploadController } from './upload.controller';
 
-// 🛡️ NOVO: Importe o serviço do Cloudinary
+// 🛡️ Cloudinary
 import { CloudinaryService } from './cloudinary.service';
 
+// 🛡️ Super Admin
 import { SuperController } from './super/super.controller';
 import { SuperService } from './super/super.service';
 
+// 🚨 IMPORTANTE: Importar o Controller de Nightclubs para registrar as rotas de Callback
+import { NightclubsController } from './nightclubs/nightclubs.controller';
+
 @Module({
-  imports: [
-    // 💡 REMOVEMOS o ServeStaticModule pois não usaremos mais a pasta 'uploads' local
-    NightclubsModule,
-    SpacesModule,
-    ReservationsModule,
-    AuthModule,
+  imports: [NightclubsModule, SpacesModule, ReservationsModule, AuthModule],
+  controllers: [
+    AppController,
+    UploadController,
+    SuperController,
+    NightclubsController,
   ],
-  controllers: [AppController, UploadController, SuperController],
-  providers: [
-    AppService,
-    PrismaService,
-    SuperService,
-    CloudinaryService, // 🛡️ ADICIONADO: CloudinaryService agora está disponível para a API
-  ],
+  providers: [AppService, PrismaService, SuperService, CloudinaryService],
 })
 export class AppModule {}
