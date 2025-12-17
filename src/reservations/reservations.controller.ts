@@ -84,25 +84,6 @@ export class ReservationsController {
   // ===========================================================================
   // Use um MasterGuard aqui para proteger esta rota em produção
   // @UseGuards(MasterGuard)
-  @Post('simulate-pay/:paymentId')
-  async simulatePayAndGetToken(@Param('paymentId') paymentId: string) {
-    const reservation =
-      await this.reservationsService.forceApproveSimulation(paymentId);
-
-    if (!reservation) {
-      throw new NotFoundException(
-        'Pagamento ou reserva não encontrado para simulação.',
-      );
-    }
-
-    // Retorna o token de validação que deve ser usado na tela de check-in
-    return {
-      message:
-        'Pagamento simulado e reserva CONFIRMADA! Use o token abaixo para o check-in:',
-      validationToken: reservation.validationToken,
-      reservationId: reservation.id,
-    };
-  }
 
   // ===========================================================================
   // 7. GERAR PIX MANUALMENTE (Endpoint Auxiliar)

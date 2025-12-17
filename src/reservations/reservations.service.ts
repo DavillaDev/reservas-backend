@@ -9,7 +9,7 @@ import { UpdateReservationDto } from './dto/update-reservation.dto';
 import { PrismaService } from '../prisma.service';
 import { MailService } from '../mail/mail.service';
 import { MercadoPagoConfig, Payment } from 'mercadopago';
-import { addMinutes } from 'date-fns';
+import { addMinutes, isAfter } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '@nestjs/config';
 
@@ -59,6 +59,7 @@ export class ReservationsService {
     const requiresPayment = price > 0 && paymentActive;
 
     const initialStatus = requiresPayment ? 'PENDING' : 'CONFIRMED';
+    // Definimos um deadline inicial de 15 min no ato da criação
     const paymentDeadline = requiresPayment ? addMinutes(new Date(), 15) : null;
     const validationToken = !requiresPayment ? uuidv4() : null;
 
@@ -125,10 +126,18 @@ export class ReservationsService {
 
     if (!reservation) throw new NotFoundException('Reserva não encontrada.');
 
+    // Verifica se já está pago
+    if (
+      reservation.status === 'CONFIRMED' ||
+      (reservation.status as string) === 'COMPLETED'
+    ) {
+      return { status: 'PAID', reservation };
+    }
+
+    // Verifica expiração baseada no banco de dados para evitar reset de timer
     if (
       reservation.paymentDeadline &&
-      reservation.paymentDeadline < new Date() &&
-      reservation.status === 'PENDING'
+      isAfter(new Date(), new Date(reservation.paymentDeadline))
     ) {
       await this.prisma.reservation.update({
         where: { id },
@@ -137,19 +146,12 @@ export class ReservationsService {
       throw new ConflictException('O prazo para pagamento expirou.');
     }
 
-    if (
-      reservation.status === 'CONFIRMED' ||
-      reservation.status === 'COMPLETED'
-    ) {
-      return { status: 'PAID', reservation };
-    }
-
     const pixData = await this.generatePix(id);
     return { status: 'PENDING', reservation, pix: pixData };
   }
 
   // ===========================================================================
-  // 4. GERAR PIX (COM LÓGICA DE SPLIT E WEBHOOK SEGURO)
+  // 4. GERAR OU RECUPERAR PIX (BLOQUEIA RESET DE TIMER)
   // ===========================================================================
   async generatePix(reservationId: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -159,42 +161,68 @@ export class ReservationsService {
 
     if (!reservation) throw new NotFoundException('Reserva não encontrada');
 
-    // 🚨 FORÇAR TOKEN DA PLATAFORMA (CONTINGÊNCIA)
-    // Ignoramos o token da balada temporariamente para evitar o erro 403/UNAUTHORIZED
     const activeToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-
     if (!activeToken) {
       throw new BadRequestException(
-        'Configuração MP_PLATFORM_ACCESS_TOKEN ausente no Render.',
+        'Configuração MP_PLATFORM_ACCESS_TOKEN ausente.',
       );
     }
 
     const client = new MercadoPagoConfig({ accessToken: activeToken });
     const payment = new Payment(client);
-    const expiresAtDate = addMinutes(new Date(), 15);
 
     try {
-      const paymentBody: any = {
-        transaction_amount: Number(
-          reservation.amount || reservation.space.price || 0,
-        ),
-        description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
-        payment_method_id: 'pix',
-        payer: {
-          email: reservation.customerEmail || 'cliente@email.com',
-          first_name: reservation.customerName.split(' ')[0],
+      // 🚨 LOGICA DE RECUPERAÇÃO: Se já existe pagamento válido, busca no MP em vez de criar novo
+      if (
+        reservation.paymentId &&
+        reservation.paymentDeadline &&
+        isAfter(new Date(reservation.paymentDeadline), new Date())
+      ) {
+        try {
+          const existingPayment = await payment.get({
+            id: reservation.paymentId,
+          });
+
+          if (existingPayment.status === 'pending') {
+            console.log(
+              `♻️ Recuperando pagamento existente: ${reservation.paymentId}`,
+            );
+            return {
+              qrCodeBase64:
+                existingPayment.point_of_interaction?.transaction_data
+                  ?.qr_code_base64,
+              pixCode:
+                existingPayment.point_of_interaction?.transaction_data?.qr_code,
+              paymentId: existingPayment.id,
+              amount: reservation.amount,
+              expiresAt: reservation.paymentDeadline, // Retorna o deadline original do banco
+            };
+          }
+        } catch (e) {
+          console.log('⚠️ Erro ao recuperar pagamento, gerando um novo...');
+        }
+      }
+
+      // Se expirou ou não existe, cria um novo (Damos 20 min agora para folga de processamento)
+      const expiresAtDate = addMinutes(new Date(), 20);
+      const amount = Number(reservation.amount || reservation.space.price || 0);
+
+      const response = await payment.create({
+        body: {
+          transaction_amount: amount,
+          description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
+          payment_method_id: 'pix',
+          payer: {
+            email: reservation.customerEmail || 'cliente@email.com',
+            first_name: reservation.customerName.split(' ')[0],
+          },
+          notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
+          date_of_expiration: expiresAtDate.toISOString(),
+          external_reference: reservation.id,
         },
-        notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
-        date_of_expiration: expiresAtDate.toISOString(),
-        external_reference: reservation.id,
-      };
+      });
 
-      console.log(
-        `⚠️ [CONTINGÊNCIA] Gerando PIX via conta PLATAFORMA para evitar bloqueio OAuth.`,
-      );
-
-      const response = await payment.create({ body: paymentBody });
-
+      // Atualiza banco com novo ID e Deadline
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -209,7 +237,7 @@ export class ReservationsService {
           response.point_of_interaction?.transaction_data?.qr_code_base64,
         pixCode: response.point_of_interaction?.transaction_data?.qr_code,
         paymentId: response.id,
-        amount: paymentBody.transaction_amount,
+        amount,
         expiresAt: expiresAtDate,
       };
     } catch (error: any) {
@@ -217,39 +245,12 @@ export class ReservationsService {
         '❌ ERRO CRÍTICO MP:',
         error.response?.data || error.message,
       );
-      throw new BadRequestException(
-        'Erro técnico no checkout. Tente novamente.',
-      );
+      throw new BadRequestException('Erro ao processar checkout.');
     }
-  }
-  // Função auxiliar para não repetir código
-  private async handleMpResponse(
-    response: any,
-    reservationId: string,
-    expiresAt: Date,
-    amount: number,
-  ) {
-    await this.prisma.reservation.update({
-      where: { id: reservationId },
-      data: {
-        paymentId: response.id?.toString(),
-        paymentDeadline: expiresAt,
-        status: 'PENDING',
-      },
-    });
-
-    return {
-      qrCodeBase64:
-        response.point_of_interaction?.transaction_data?.qr_code_base64,
-      pixCode: response.point_of_interaction?.transaction_data?.qr_code,
-      paymentId: response.id,
-      amount,
-      expiresAt,
-    };
   }
 
   // ===========================================================================
-  // 5. WEBHOOK (PROCESSAMENTO EM BACKGROUND)
+  // 5. WEBHOOK
   // ===========================================================================
   async processWebhook(paymentId: string) {
     const reservation = await this.prisma.reservation.findFirst({
@@ -259,14 +260,9 @@ export class ReservationsService {
 
     if (!reservation || reservation.status === 'CONFIRMED') return;
 
-    const settings = (reservation.nightclub.settings as any) || {};
-    const platformAccessToken = this.configService.get(
+    const activeAccessToken = this.configService.get(
       'MP_PLATFORM_ACCESS_TOKEN',
     );
-
-    // Webhook deve consultar usando o token que gerou o pagamento
-    const activeAccessToken = settings.mpAccessToken || platformAccessToken;
-
     const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
     const payment = new Payment(client);
 
@@ -274,13 +270,9 @@ export class ReservationsService {
       const paymentData = await payment.get({ id: paymentId });
       if (paymentData.status === 'approved') {
         const validationToken = uuidv4();
-
         const updated = await this.prisma.reservation.update({
           where: { id: reservation.id },
-          data: {
-            status: 'CONFIRMED',
-            validationToken,
-          },
+          data: { status: 'CONFIRMED', validationToken },
           include: { space: true, nightclub: true },
         });
 
@@ -290,7 +282,6 @@ export class ReservationsService {
             updated.nightclub.name,
           );
         }
-        console.log(`✅ Pagamento aprovado para reserva ${reservation.id}`);
       }
     } catch (error) {
       console.error('Erro ao processar Webhook:', error.message);
@@ -298,7 +289,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 6. VALIDAÇÃO, CHECK-IN E CRUD
+  // 6. CRUD E VALIDAÇÃO
   // ===========================================================================
   async checkInByToken(token: string) {
     const reservation = await this.prisma.reservation.findFirst({
@@ -328,30 +319,5 @@ export class ReservationsService {
 
   remove(id: string) {
     return this.prisma.reservation.delete({ where: { id } });
-  }
-
-  async forceApproveSimulation(paymentId: string) {
-    const reservation = await this.prisma.reservation.findFirst({
-      where: { paymentId: paymentId.toString() },
-      include: { space: true, nightclub: true },
-    });
-
-    if (!reservation) return null;
-
-    const validationToken = uuidv4();
-    const updated = await this.prisma.reservation.update({
-      where: { id: reservation.id },
-      data: { status: 'CONFIRMED', validationToken },
-      include: { space: true, nightclub: true },
-    });
-
-    if (updated.customerEmail) {
-      await this.mailService.sendReservationConfirmation(
-        updated as any,
-        updated.nightclub.name,
-      );
-    }
-
-    return updated;
   }
 }
