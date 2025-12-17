@@ -127,6 +127,7 @@ export class NightclubsService {
       platform_id: 'mp',
       redirect_uri: redirectUri,
       state: nightclubId,
+      scopes: 'read,write,offline_access,payments',
     });
 
     return `${MP_OAUTH_BASE_URL}?${params.toString()}`;
