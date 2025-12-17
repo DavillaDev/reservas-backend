@@ -1,10 +1,4 @@
-// api/src/app.module.ts
 import { Module } from '@nestjs/common';
-// 👈 NOVO: Imports para servir arquivos estáticos
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'path';
-// FIM NOVOS IMPORTS
-
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaService } from './prisma.service';
@@ -14,23 +8,26 @@ import { ReservationsModule } from './reservations/reservations.module';
 import { AuthModule } from './auth/auth.module';
 import { UploadController } from './upload.controller';
 
-// Imports do God Mode (se você usou o meu código anterior)
+// 🛡️ NOVO: Importe o serviço do Cloudinary
+import { CloudinaryService } from './cloudinary.service';
+
 import { SuperController } from './super/super.controller';
 import { SuperService } from './super/super.service';
 
 @Module({
   imports: [
-    ServeStaticModule.forRoot({
-      rootPath: join(process.cwd(), 'uploads'),
-      serveRoot: '/uploads/',
-    }),
-
+    // 💡 REMOVEMOS o ServeStaticModule pois não usaremos mais a pasta 'uploads' local
     NightclubsModule,
     SpacesModule,
     ReservationsModule,
     AuthModule,
   ],
   controllers: [AppController, UploadController, SuperController],
-  providers: [AppService, PrismaService, SuperService],
+  providers: [
+    AppService,
+    PrismaService,
+    SuperService,
+    CloudinaryService, // 🛡️ ADICIONADO: CloudinaryService agora está disponível para a API
+  ],
 })
 export class AppModule {}

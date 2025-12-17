@@ -3,34 +3,40 @@ import {
   Post,
   UseInterceptors,
   UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
-
-const baseUrl = process.env.API_URL;
+import { CloudinaryService } from './cloudinary.service'; // 🛡️ Importando seu novo serviço
 
 @Controller('upload')
 export class UploadController {
+  // Injetamos o serviço no construtor
+  constructor(private readonly cloudinaryService: CloudinaryService) {}
+
   @Post()
   @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: './uploads',
-        filename: (req, file, cb) => {
-          const randomName = Array(32)
-            .fill(null)
-            .map(() => Math.floor(Math.random() * 16).toString(16))
-            .join('');
-          cb(null, `${randomName}${extname(file.originalname)}`);
-        },
-      }),
-    }),
+    // 🛡️ Removemos o 'storage: diskStorage'.
+    // Por padrão, o Nest guarda o arquivo no 'buffer' (memória RAM)
+    FileInterceptor('file'),
   )
-  uploadFile(@UploadedFile() file: Express.Multer.File) {
-    // ✅ RETORNE APENAS O CAMINHO
-    return {
-      url: `${baseUrl}/uploads/${file.filename}`,
-    };
+  async uploadFile(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('Nenhum arquivo enviado.');
+    }
+
+    try {
+      // 🛡️ Enviamos o buffer para o Cloudinary e aguardamos a URL permanente
+      const imageUrl = await this.cloudinaryService.uploadImage(file);
+
+      // ✅ Retornamos a URL definitiva do Cloudinary (https://res.cloudinary.com/...)
+      return {
+        url: imageUrl,
+      };
+    } catch (error) {
+      console.error('Erro no upload Cloudinary:', error);
+      throw new BadRequestException(
+        'Falha ao subir imagem para o servidor de nuvem.',
+      );
+    }
   }
 }
