@@ -159,13 +159,15 @@ export class ReservationsService {
 
     if (!reservation) throw new NotFoundException('Reserva não encontrada');
 
-    const settings = (reservation.nightclub.settings as any) || {};
-    const amount = Number(reservation.amount || reservation.space.price || 0);
+    // 🚨 FORÇAR TOKEN DA PLATAFORMA (CONTINGÊNCIA)
+    // Ignoramos o token da balada temporariamente para evitar o erro 403/UNAUTHORIZED
+    const activeToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
 
-    // 🔑 LÓGICA DE TOKEN: Prioriza o da Balada para garantir que o dinheiro vá para eles
-    // Se não houver, usa o seu (Modelo plataforma recebe tudo)
-    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-    const activeToken = settings.mpAccessToken || platformToken;
+    if (!activeToken) {
+      throw new BadRequestException(
+        'Configuração MP_PLATFORM_ACCESS_TOKEN ausente no Render.',
+      );
+    }
 
     const client = new MercadoPagoConfig({ accessToken: activeToken });
     const payment = new Payment(client);
@@ -173,7 +175,9 @@ export class ReservationsService {
 
     try {
       const paymentBody: any = {
-        transaction_amount: amount,
+        transaction_amount: Number(
+          reservation.amount || reservation.space.price || 0,
+        ),
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
         payment_method_id: 'pix',
         payer: {
@@ -185,11 +189,8 @@ export class ReservationsService {
         external_reference: reservation.id,
       };
 
-      // 🛡️ REMOVIDO application_fee para evitar o erro 400 "Unauthorized Policy"
-      // Enquanto sua conta não é aprovada como Marketplace, o split automático é bloqueado.
-
       console.log(
-        `💳 [FLOW] Gerando PIX via conta: ${settings.mpAccessToken ? 'DA BALADA (OAuth)' : 'DA PLATAFORMA'}`,
+        `⚠️ [CONTINGÊNCIA] Gerando PIX via conta PLATAFORMA para evitar bloqueio OAuth.`,
       );
 
       const response = await payment.create({ body: paymentBody });
@@ -208,16 +209,16 @@ export class ReservationsService {
           response.point_of_interaction?.transaction_data?.qr_code_base64,
         pixCode: response.point_of_interaction?.transaction_data?.qr_code,
         paymentId: response.id,
-        amount,
+        amount: paymentBody.transaction_amount,
         expiresAt: expiresAtDate,
       };
     } catch (error: any) {
       console.error(
-        '❌ ERRO MERCADO PAGO:',
+        '❌ ERRO CRÍTICO MP:',
         error.response?.data || error.message,
       );
       throw new BadRequestException(
-        'Erro ao processar pagamento. Tente novamente.',
+        'Erro técnico no checkout. Tente novamente.',
       );
     }
   }
