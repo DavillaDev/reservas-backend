@@ -162,22 +162,22 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const amount = Number(reservation.amount || reservation.space.price || 0);
 
-    // 🔑 SEMPRE USAMOS O SEU TOKEN DE PLATAFORMA
+    // 🔑 USAMOS O SEU TOKEN (Sempre plataforma para Split)
     const platformAccessToken = this.configService.get(
       'MP_PLATFORM_ACCESS_TOKEN',
     );
-
-    if (!platformAccessToken) {
-      throw new BadRequestException(
-        'Token de plataforma não configurado no Render.',
-      );
-    }
 
     const client = new MercadoPagoConfig({ accessToken: platformAccessToken });
     const payment = new Payment(client);
     const expiresAtDate = addMinutes(new Date(), 15);
 
     try {
+      // 💰 Lógica de Taxa (Application Fee)
+      const appFeePercent = Number(settings?.appFeePercent || 5); // 5% de exemplo se não houver no banco
+      const applicationFee = parseFloat(
+        ((amount * appFeePercent) / 100).toFixed(2),
+      );
+
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
@@ -189,24 +189,20 @@ export class ReservationsService {
         notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
+
+        // 🚀 TENTANDO O SPLIT (Isso pode dar o erro 400 se não houver permissão de Marketplace)
+        application_fee: applicationFee,
       };
 
-      // 🛡️ Lógica de Direcionamento (Marketplace)
       const requestOptions: any = {};
 
       if (settings.mpAccountId) {
-        // Se a balada estiver conectada, enviamos o ID dela no header
-        // O dinheiro vai para ela, e você pode (opcionalmente) cobrar a taxa
+        // FORÇANDO O DESTINO: Sem esse header, o dinheiro cai na sua conta.
         requestOptions.headers = {
           'X-Target-App-Id': settings.mpAccountId.toString(),
         };
-
-        // ⚠️ ATENÇÃO: Remova a linha abaixo se o erro "You cannot use application_fee" persistir
-        // Ela só funciona após a homologação de Marketplace que te expliquei
-        // paymentBody.application_fee = 0.50;
-
         console.log(
-          `💰 [MARKETPLACE] Criando pagamento via Plataforma para Balada ID: ${settings.mpAccountId}`,
+          `🚀 [TRY SPLIT] Destino: ${settings.mpAccountId} | Taxa: R$ ${applicationFee}`,
         );
       }
 
@@ -215,6 +211,7 @@ export class ReservationsService {
         ...requestOptions,
       });
 
+      // Se chegar aqui, o QR Code foi gerado com sucesso
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -233,12 +230,12 @@ export class ReservationsService {
         expiresAt: expiresAtDate,
       };
     } catch (error: any) {
-      console.error(
-        '❌ ERRO NO MERCADO PAGO:',
-        error.response?.data || error.message,
-      );
+      console.error('❌ ERRO NO SPLIT:', error.response?.data || error.message);
+
+      // Se der erro de UNAUTHORIZED aqui, é o veredito final:
+      // O MP exige que você preencha o formulário de PRODUÇÃO como MARKETPLACE no painel.
       throw new BadRequestException(
-        'Erro ao gerar PIX. Verifique a homologação de Marketplace da sua aplicação.',
+        'Erro ao processar split. Verifique a homologação da aplicação no Mercado Pago.',
       );
     }
   }
