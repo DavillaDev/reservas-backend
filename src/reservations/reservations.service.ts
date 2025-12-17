@@ -162,25 +162,31 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const amount = Number(reservation.amount || reservation.space.price || 0);
 
-    // 🛡️ DEFINIÇÕES DE TOKEN
-    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-    const nightclubToken = settings.mpAccessToken;
-
-    // Se houver token da balada, o MP exige que a requisição seja feita com o seu token de PLATAFORMA
-    // e o token dela seja referenciado ou vice-versa dependendo do fluxo.
-    // VAMOS FORÇAR O MODELO MOR (Plataforma recebe) caso o split dê erro de autorização.
-
-    const activeToken = nightclubToken || platformToken;
-
-    console.log(
-      `🔑 [PAYMENT] Usando token: ${nightclubToken ? 'DA BALADA' : 'DA PLATAFORMA'}`,
+    // 🔑 O Token deve ser o da PLATAFORMA para operar como Marketplace
+    const platformAccessToken = this.configService.get(
+      'MP_PLATFORM_ACCESS_TOKEN',
     );
 
-    const client = new MercadoPagoConfig({ accessToken: activeToken });
+    if (!platformAccessToken) {
+      throw new BadRequestException(
+        'Token de plataforma não configurado no Render.',
+      );
+    }
+
+    const client = new MercadoPagoConfig({ accessToken: platformAccessToken });
     const payment = new Payment(client);
     const expiresAtDate = addMinutes(new Date(), 15);
 
     try {
+      // Cálculo da Taxa (Application Fee)
+      const appFeePercent = Number(settings?.appFeePercent || 0);
+      let applicationFee = 0;
+      if (appFeePercent > 0) {
+        applicationFee = parseFloat(
+          ((amount * appFeePercent) / 100).toFixed(2),
+        );
+      }
+
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
@@ -194,20 +200,31 @@ export class ReservationsService {
         external_reference: reservation.id,
       };
 
-      // 🚨 BLINDAGEM: Só tenta Split se tivermos absoluta certeza das credenciais
-      if (
-        nightclubToken &&
-        settings.mpAccountId &&
-        settings.appFeePercent > 0
-      ) {
-        // Se der erro UNAUTHORIZED, o problema é que sua APP não pode cobrar application_fee ainda
-        paymentBody.application_fee = parseFloat(
-          ((amount * settings.appFeePercent) / 100).toFixed(2),
+      // 🛡️ DEFINIÇÃO DO HEADER DE SPLIT
+      const requestOptions: any = {};
+
+      if (settings.mpAccountId) {
+        // O dinheiro vai para a balada, e você retém a application_fee
+        if (applicationFee > 0) {
+          paymentBody.application_fee = applicationFee;
+        }
+
+        // CORREÇÃO: A SDK v2 espera 'headers' dentro de requestOptions
+        requestOptions.headers = {
+          'X-Target-App-Id': settings.mpAccountId.toString(),
+        };
+
+        console.log(
+          `💰 [SPLIT] Criando pagamento para conta: ${settings.mpAccountId} com taxa de R$ ${applicationFee}`,
         );
       }
 
-      const response = await payment.create({ body: paymentBody });
+      const response = await payment.create({
+        body: paymentBody,
+        ...requestOptions, // Espalha headers se existirem
+      });
 
+      // Salva os dados do pagamento no banco
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -230,16 +247,36 @@ export class ReservationsService {
         '❌ ERRO NO MERCADO PAGO:',
         error.response?.data || error.message,
       );
-
-      // Se o erro for UNAUTHORIZED e estávamos tentando usar o token da balada,
-      // vamos sugerir deslogar a balada para testar com o token da plataforma
       throw new BadRequestException(
-        error.response?.data?.message ===
-          'At least one policy returned UNAUTHORIZED'
-          ? 'Erro de autorização no Mercado Pago. Verifique se as credenciais da balada são válidas e possuem permissão.'
-          : 'Erro ao gerar pagamento.',
+        'Erro ao gerar PIX. Verifique as permissões da conta vinculada.',
       );
     }
+  }
+
+  // Função auxiliar para não repetir código
+  private async handleMpResponse(
+    response: any,
+    reservationId: string,
+    expiresAt: Date,
+    amount: number,
+  ) {
+    await this.prisma.reservation.update({
+      where: { id: reservationId },
+      data: {
+        paymentId: response.id?.toString(),
+        paymentDeadline: expiresAt,
+        status: 'PENDING',
+      },
+    });
+
+    return {
+      qrCodeBase64:
+        response.point_of_interaction?.transaction_data?.qr_code_base64,
+      pixCode: response.point_of_interaction?.transaction_data?.qr_code,
+      paymentId: response.id,
+      amount,
+      expiresAt,
+    };
   }
 
   // ===========================================================================
