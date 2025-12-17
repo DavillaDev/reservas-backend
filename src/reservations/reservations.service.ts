@@ -162,22 +162,16 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const amount = Number(reservation.amount || reservation.space.price || 0);
 
-    // 🔑 USAMOS O SEU TOKEN (Sempre plataforma para Split)
-    const platformAccessToken = this.configService.get(
-      'MP_PLATFORM_ACCESS_TOKEN',
-    );
+    // 🔑 LÓGICA DE TOKEN: Prioriza o da Balada para garantir que o dinheiro vá para eles
+    // Se não houver, usa o seu (Modelo plataforma recebe tudo)
+    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+    const activeToken = settings.mpAccessToken || platformToken;
 
-    const client = new MercadoPagoConfig({ accessToken: platformAccessToken });
+    const client = new MercadoPagoConfig({ accessToken: activeToken });
     const payment = new Payment(client);
     const expiresAtDate = addMinutes(new Date(), 15);
 
     try {
-      // 💰 Lógica de Taxa (Application Fee)
-      const appFeePercent = Number(settings?.appFeePercent || 5); // 5% de exemplo se não houver no banco
-      const applicationFee = parseFloat(
-        ((amount * appFeePercent) / 100).toFixed(2),
-      );
-
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
@@ -189,29 +183,17 @@ export class ReservationsService {
         notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
-
-        // 🚀 TENTANDO O SPLIT (Isso pode dar o erro 400 se não houver permissão de Marketplace)
-        application_fee: applicationFee,
       };
 
-      const requestOptions: any = {};
+      // 🛡️ REMOVIDO application_fee para evitar o erro 400 "Unauthorized Policy"
+      // Enquanto sua conta não é aprovada como Marketplace, o split automático é bloqueado.
 
-      if (settings.mpAccountId) {
-        // FORÇANDO O DESTINO: Sem esse header, o dinheiro cai na sua conta.
-        requestOptions.headers = {
-          'X-Target-App-Id': settings.mpAccountId.toString(),
-        };
-        console.log(
-          `🚀 [TRY SPLIT] Destino: ${settings.mpAccountId} | Taxa: R$ ${applicationFee}`,
-        );
-      }
+      console.log(
+        `💳 [FLOW] Gerando PIX via conta: ${settings.mpAccessToken ? 'DA BALADA (OAuth)' : 'DA PLATAFORMA'}`,
+      );
 
-      const response = await payment.create({
-        body: paymentBody,
-        ...requestOptions,
-      });
+      const response = await payment.create({ body: paymentBody });
 
-      // Se chegar aqui, o QR Code foi gerado com sucesso
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -230,16 +212,15 @@ export class ReservationsService {
         expiresAt: expiresAtDate,
       };
     } catch (error: any) {
-      console.error('❌ ERRO NO SPLIT:', error.response?.data || error.message);
-
-      // Se der erro de UNAUTHORIZED aqui, é o veredito final:
-      // O MP exige que você preencha o formulário de PRODUÇÃO como MARKETPLACE no painel.
+      console.error(
+        '❌ ERRO MERCADO PAGO:',
+        error.response?.data || error.message,
+      );
       throw new BadRequestException(
-        'Erro ao processar split. Verifique a homologação da aplicação no Mercado Pago.',
+        'Erro ao processar pagamento. Tente novamente.',
       );
     }
   }
-
   // Função auxiliar para não repetir código
   private async handleMpResponse(
     response: any,
