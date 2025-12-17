@@ -161,68 +161,69 @@ export class ReservationsService {
 
     if (!reservation) throw new NotFoundException('Reserva não encontrada');
 
-    const activeToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-    if (!activeToken) {
-      throw new BadRequestException(
-        'Configuração MP_PLATFORM_ACCESS_TOKEN ausente.',
-      );
-    }
+    const settings = (reservation.nightclub.settings as any) || {};
+    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
 
-    const client = new MercadoPagoConfig({ accessToken: activeToken });
+    const client = new MercadoPagoConfig({ accessToken: platformToken });
     const payment = new Payment(client);
 
     try {
-      // 🚨 LOGICA DE RECUPERAÇÃO: Se já existe pagamento válido, busca no MP em vez de criar novo
+      // 1. RECUPERAÇÃO (TIMER PERSISTENTE)
       if (
         reservation.paymentId &&
         reservation.paymentDeadline &&
-        isAfter(new Date(reservation.paymentDeadline), new Date())
+        new Date(reservation.paymentDeadline) > new Date()
       ) {
         try {
-          const existingPayment = await payment.get({
-            id: reservation.paymentId,
-          });
-
-          if (existingPayment.status === 'pending') {
-            console.log(
-              `♻️ Recuperando pagamento existente: ${reservation.paymentId}`,
-            );
+          const existing = await payment.get({ id: reservation.paymentId });
+          if (existing.status === 'pending') {
             return {
               qrCodeBase64:
-                existingPayment.point_of_interaction?.transaction_data
-                  ?.qr_code_base64,
-              pixCode:
-                existingPayment.point_of_interaction?.transaction_data?.qr_code,
-              paymentId: existingPayment.id,
+                existing.point_of_interaction?.transaction_data?.qr_code_base64,
+              pixCode: existing.point_of_interaction?.transaction_data?.qr_code,
+              paymentId: existing.id,
               amount: reservation.amount,
-              expiresAt: reservation.paymentDeadline, // Retorna o deadline original do banco
+              expiresAt: reservation.paymentDeadline,
             };
           }
         } catch (e) {
-          console.log('⚠️ Erro ao recuperar pagamento, gerando um novo...');
+          console.log('Gerando novo PIX...');
         }
       }
 
-      // Se expirou ou não existe, cria um novo (Damos 20 min agora para folga de processamento)
+      // 2. CRIAÇÃO COM SPLIT (AGORA COM TOKEN CORRETO)
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
+      const appFee = parseFloat(
+        ((amount * (settings.appFeePercent || 0)) / 100).toFixed(2),
+      );
+
+      const paymentBody: any = {
+        transaction_amount: amount,
+        description: `Reserva: ${reservation.nightclub.name}`,
+        payment_method_id: 'pix',
+        payer: {
+          email: reservation.customerEmail || 'cliente@email.com',
+          first_name: reservation.customerName.split(' ')[0],
+        },
+        notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
+        date_of_expiration: expiresAtDate.toISOString(),
+        external_reference: reservation.id,
+      };
+
+      const requestOptions: any = {};
+      if (settings.mpAccountId) {
+        paymentBody.application_fee = appFee > 0 ? appFee : undefined;
+        requestOptions.headers = {
+          'X-Target-App-Id': settings.mpAccountId.toString(),
+        };
+      }
 
       const response = await payment.create({
-        body: {
-          transaction_amount: amount,
-          description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
-          payment_method_id: 'pix',
-          payer: {
-            email: reservation.customerEmail || 'cliente@email.com',
-            first_name: reservation.customerName.split(' ')[0],
-          },
-          notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
-          date_of_expiration: expiresAtDate.toISOString(),
-          external_reference: reservation.id,
-        },
+        body: paymentBody,
+        ...requestOptions,
       });
 
-      // Atualiza banco com novo ID e Deadline
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -241,11 +242,10 @@ export class ReservationsService {
         expiresAt: expiresAtDate,
       };
     } catch (error: any) {
-      console.error(
-        '❌ ERRO CRÍTICO MP:',
-        error.response?.data || error.message,
+      console.error('❌ ERRO MP:', error.response?.data || error.message);
+      throw new BadRequestException(
+        'Erro ao gerar pagamento. Verifique as credenciais.',
       );
-      throw new BadRequestException('Erro ao processar checkout.');
     }
   }
 
