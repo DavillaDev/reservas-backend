@@ -30,7 +30,9 @@ export class NightclubsService {
     private configService: ConfigService,
   ) {}
 
+  // ===========================================================================
   // 1. CRIAR BALADA
+  // ===========================================================================
   async create(createNightclubDto: CreateNightclubDto) {
     const { name, slug, whatsapp, themeColor, logoUrl, mapUrl } =
       createNightclubDto;
@@ -47,7 +49,9 @@ export class NightclubsService {
     });
   }
 
+  // ===========================================================================
   // 2. LISTAR TODAS
+  // ===========================================================================
   findAll() {
     return this.prisma.nightclub.findMany({
       include: {
@@ -57,7 +61,9 @@ export class NightclubsService {
     });
   }
 
+  // ===========================================================================
   // 3. BUSCAR POR ID
+  // ===========================================================================
   findOne(id: string) {
     return this.prisma.nightclub.findUnique({
       where: { id },
@@ -67,7 +73,9 @@ export class NightclubsService {
     });
   }
 
+  // ===========================================================================
   // 4. BUSCAR POR SLUG (Página Pública)
+  // ===========================================================================
   findBySlug(slug: string) {
     return this.prisma.nightclub.findUnique({
       where: { slug },
@@ -80,13 +88,14 @@ export class NightclubsService {
     });
   }
 
+  // ===========================================================================
   // 5. ATUALIZAR
+  // ===========================================================================
   async update(id: string, updateNightclubDto: UpdateNightclubDto) {
     const { settings, ...restOfData } = updateNightclubDto;
     const dataToUpdate: any = { ...restOfData };
 
     if (settings) {
-      // Garantimos que o settings seja um objeto plano para o campo JSON do Prisma
       dataToUpdate.settings = classToPlain(settings);
     }
 
@@ -97,7 +106,9 @@ export class NightclubsService {
     });
   }
 
-  // 6. DELETAR (Cascata Manual via Transação)
+  // ===========================================================================
+  // 6. DELETAR (Cascata Manual)
+  // ===========================================================================
   async remove(id: string) {
     return this.prisma.$transaction(async (tx) => {
       await tx.reservation.deleteMany({ where: { nightclubId: id } });
@@ -109,7 +120,7 @@ export class NightclubsService {
   }
 
   // ===========================================================================
-  // 7. MERCADO PAGO: GERAR URL DE CONEXÃO
+  // 7. MERCADO PAGO: GERAR URL DE CONEXÃO (OAuth)
   // ===========================================================================
   async generateMpConnectUrl(nightclubId: string): Promise<string> {
     const clientId = this.configService.get('MP_CLIENT_ID');
@@ -127,6 +138,7 @@ export class NightclubsService {
       platform_id: 'mp',
       redirect_uri: redirectUri,
       state: nightclubId,
+      // Scopes necessários para gerar pagamentos em nome da balada
       scopes: 'read,write,offline_access,payments',
     });
 
@@ -148,7 +160,7 @@ export class NightclubsService {
     }
 
     try {
-      // 1. TROCAR CODE POR ACCESS_TOKEN
+      // 1. TROCAR CODE POR ACCESS_TOKEN (Vínculo oficial com a balada)
       const tokenResponse = await axios.post<MpTokenResponse>(MP_TOKEN_URL, {
         client_id: clientId,
         client_secret: clientSecret,
@@ -157,9 +169,10 @@ export class NightclubsService {
         redirect_uri: redirectUri,
       });
 
-      const { access_token, user_id, public_key } = tokenResponse.data;
+      const { access_token, user_id, public_key, refresh_token } =
+        tokenResponse.data;
 
-      // 2. BUSCAR CONFIGURAÇÕES ATUAIS
+      // 2. BUSCAR CONFIGURAÇÕES ATUAIS PARA NÃO SOBRESCREVER OUTROS CAMPOS JSON
       const nightclub = await this.prisma.nightclub.findUnique({
         where: { id: nightclubId },
         select: { settings: true },
@@ -167,16 +180,17 @@ export class NightclubsService {
 
       if (!nightclub) throw new NotFoundException('Balada não encontrada.');
 
-      // 3. MESCLAR NOVOS DADOS NO JSON 'settings'
       const currentSettings =
         typeof nightclub.settings === 'object'
           ? (nightclub.settings as any)
           : {};
 
+      // 3. MESCLAR DADOS. O 'mpAccessToken' é o que garante o dinheiro direto para eles.
       const updatedSettings = {
         ...currentSettings,
         mpAccountId: String(user_id),
         mpAccessToken: access_token,
+        mpRefreshToken: refresh_token, // Guardamos para renovar se necessário
         mpPublicKey: public_key,
         mpConnectStatus: 'CONNECTED',
         mpConnectDate: new Date().toISOString(),
@@ -191,13 +205,13 @@ export class NightclubsService {
       });
 
       console.log(
-        `✅ SUCESSO: Balada ${nightclubId} conectada ao MP. ID Conta: ${user_id}`,
+        `✅ CONEXÃO ESTABELECIDA: Balada ${nightclubId} vinculada ao MP. Account ID: ${user_id}`,
       );
     } catch (error: any) {
       const errorData = error.response?.data || error.message;
-      console.error('❌ Erro na troca de Token MP:', errorData);
+      console.error('❌ ERRO OAUTH MP:', errorData);
       throw new BadRequestException(
-        'Falha na autenticação com Mercado Pago. Verifique as credenciais da aplicação.',
+        'Falha na autenticação com Mercado Pago. Certifique-se de usar uma conta de produção válida.',
       );
     }
   }
