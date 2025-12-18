@@ -157,22 +157,20 @@ export class ReservationsService {
     });
 
     if (!reservation) {
-      throw new NotFoundException(
-        'Reserva não encontrada para gerar o pagamento.',
-      );
+      throw new NotFoundException('Reserva não encontrada.');
     }
 
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
 
-    // 🎯 MODO DIRETO: Prioriza o token da balada para o dinheiro cair lá
+    // 🔑 A CHAVE DO SUCESSO: Usa o token da balada que acabamos de validar no log!
     const accessTokenParaUsar = settings.mpAccessToken || platformToken;
 
     const client = new MercadoPagoConfig({ accessToken: accessTokenParaUsar });
     const payment = new Payment(client);
 
     try {
-      // 🛡️ RECOVERY: Reaproveita PIX pendente para manter o cronômetro estável
+      // 🛡️ RECOVERY: Não gera um novo PIX se o cliente der F5 no checkout
       if (
         reservation.paymentId &&
         reservation.paymentDeadline &&
@@ -182,7 +180,7 @@ export class ReservationsService {
           const existing = await payment.get({ id: reservation.paymentId });
           if (existing.status === 'pending') {
             console.log(
-              `[MP_RECOVERY] Reaproveitando PIX ativo: ${reservation.paymentId}`,
+              `[MP_RECOVERY] ✅ Reaproveitando PIX: ${reservation.paymentId}`,
             );
             return {
               qrCodeBase64:
@@ -203,6 +201,10 @@ export class ReservationsService {
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
 
+      // --- LOGICA DE TAXA (OPCIONAL) ---
+      // Se quiser testar o Split, descomente 'application_fee' e passe o ID no header.
+      // const appFee = parseFloat(((amount * 5) / 100).toFixed(2));
+
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
@@ -214,18 +216,27 @@ export class ReservationsService {
         notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
+        // application_fee: appFee, // <--- Descomente para tentar o Split
       };
 
       console.log(
-        `[MP_FLOW] Gerando PIX via token: ${settings.mpAccessToken ? 'DA BALADA' : 'DA PLATAFORMA'}`,
+        `[MP_FLOW] 🚀 Gerando PIX via token: ${settings.mpAccessToken ? 'DA BALADA' : 'DA PLATAFORMA'}`,
       );
 
-      const response = await payment.create({ body: paymentBody });
+      // Se for usar Split, precisa enviar o X-Target-App-Id da balada aqui
+      const response = await payment.create({
+        body: paymentBody,
+        /* requestOptions: {
+          headers: { 'X-Target-App-Id': settings.mpAccountId }
+        } 
+        */
+      });
 
       console.log(
-        `[MP_SUCCESS] Collector ID Recebedor: ${response.collector_id}`,
+        `[MP_SUCCESS] 💰 Dinheiro direto para Collector: ${response.collector_id}`,
       );
 
+      // Salva os dados no banco para o Webhook e o Frontend usarem depois
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -245,11 +256,11 @@ export class ReservationsService {
       };
     } catch (error: any) {
       console.error(
-        '❌ ERRO MERCADO PAGO:',
-        error.response?.data || error.message,
+        '❌ ERRO MP:',
+        JSON.stringify(error.response?.data || error.message),
       );
       throw new BadRequestException(
-        'Erro ao processar pagamento. Tente novamente mais tarde.',
+        'Erro ao processar pagamento. Tente novamente.',
       );
     }
   }
