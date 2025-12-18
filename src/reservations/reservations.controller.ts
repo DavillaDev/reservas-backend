@@ -9,12 +9,10 @@ import {
   Query,
   HttpCode,
   NotFoundException,
-  UseGuards, // Adicionado para proteger rotascríticas
 } from '@nestjs/common';
 import { ReservationsService } from './reservations.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
-// Importe seu MasterGuard se já tiver um (Exemplo: import { MasterGuard } from '../auth/master.guard';)
 
 @Controller('reservations')
 export class ReservationsController {
@@ -38,39 +36,52 @@ export class ReservationsController {
   ) {
     return this.reservationsService.findAll(date, nightclubId);
   }
+
   // ===========================================================================
-  // 3. CHECKOUT (Alimenta a tela de pagamento)  // ===========================================================================
+  // 3. CHECKOUT (Alimenta a tela de pagamento)
+  // ===========================================================================
   @Get(':id/checkout')
   async getCheckoutData(@Param('id') id: string) {
     return this.reservationsService.getCheckoutData(id);
   }
 
   // ===========================================================================
-  // 4. WEBHOOK REAL (Mercado Pago - Fire and Forget)
+  // 4. WEBHOOK REAL (Mercado Pago - Blindado)
   // ===========================================================================
   @Post('webhook')
-  @HttpCode(200) // Retorna 200 para evitar reenvio do MP
+  @HttpCode(200) // MP exige 200 ou 201 para parar de reenviar
   async handleWebhook(@Body() body: any, @Query() query: any) {
+    // O MP pode enviar o ID em diferentes lugares dependendo da versão da API
     const paymentId =
       body?.data?.id || body?.id || query?.id || query?.['data.id'];
-    const type = body?.type || query?.topic;
 
-    console.log('🔔 Webhook Recebido:', { paymentId, type });
+    const action = body?.action || body?.type || query?.topic;
 
-    if (paymentId && (type === 'payment' || type === 'merchant_order')) {
-      // Dispara o processo em background e retorna OK imediatamente.
+    console.log('🔔 [WEBHOOK] Recebido:', { paymentId, action });
+
+    // Verificamos se é uma notificação de pagamento aprovado ou criado
+    if (
+      paymentId &&
+      (action === 'payment' ||
+        action === 'payment.created' ||
+        action === 'payment.updated')
+    ) {
+      // Executa em background para não travar a resposta do MP
       this.reservationsService
-        .processWebhook(paymentId)
+        .processWebhook(paymentId.toString())
         .catch((err) =>
-          console.error('Erro no processamento background:', err),
+          console.error(
+            '❌ [WEBHOOK_ERROR] Erro no processamento:',
+            err.message,
+          ),
         );
     }
 
-    return { status: 'OK' };
+    return { status: 'received' };
   }
 
   // ===========================================================================
-  // 5. PORTARIA / CHECK-IN (Validação de Ingresso)
+  // 5. PORTARIA / CHECK-IN (Validação de Ingresso via QR Code)
   // ===========================================================================
   @Post('check-in/:token')
   checkInByToken(@Param('token') token: string) {
@@ -78,13 +89,7 @@ export class ReservationsController {
   }
 
   // ===========================================================================
-  // 6. SIMULAÇÃO E OBTENÇÃO DO TOKEN (Para Teste de Portaria)
-  // ===========================================================================
-  // Use um MasterGuard aqui para proteger esta rota em produção
-  // @UseGuards(MasterGuard)
-
-  // ===========================================================================
-  // 7. GERAR PIX MANUALMENTE (Endpoint Auxiliar)
+  // 6. GERAR PIX MANUALMENTE (Endpoint Auxiliar)
   // ===========================================================================
   @Post(':id/pix')
   generatePix(@Param('id') id: string) {
@@ -92,7 +97,7 @@ export class ReservationsController {
   }
 
   // ===========================================================================
-  // 8. CRUD PADRÃO
+  // 7. CRUD PADRÃO
   // ===========================================================================
   @Get(':id')
   findOne(@Param('id') id: string) {
