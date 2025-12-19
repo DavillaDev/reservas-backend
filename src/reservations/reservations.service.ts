@@ -314,9 +314,14 @@ export class ReservationsService {
     if (reservation.status === 'CHECKED_IN')
       throw new ConflictException('Já foi validado.');
 
+    // ✅ CORREÇÃO AQUI: Adicionamos o 'include' para o Frontend receber o nome do espaço
     return this.prisma.reservation.update({
       where: { id: reservation.id },
       data: { status: 'CHECKED_IN', checkInAt: new Date() },
+      include: {
+        space: true, // <--- Isso traz o nome do Espaço (Camarote, Mesa, etc)
+        nightclub: true, // <--- Isso traz o nome da Balada
+      },
     });
   }
 
