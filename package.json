@@ -26,6 +26,7 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-express": "^11.1.9",
+    "@nestjs/schedule": "^6.1.0",
     "@nestjs/serve-static": "^5.0.4",
     "@prisma/client": "^5.22.0",
     "axios": "^1.13.2",

@@ -15,9 +15,11 @@ import { CloudinaryService } from './cloudinary.service';
 // 🛡️ Super Admin
 import { SuperController } from './super/super.controller';
 import { SuperService } from './super/super.service';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     // 🛡️ Inicializa o ConfigModule globalmente para todos os outros módulos
     ConfigModule.forRoot({ isGlobal: true }),
     NightclubsModule,
