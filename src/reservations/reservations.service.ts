@@ -23,7 +23,7 @@ export class ReservationsService {
   ) {}
 
   // ===========================================================================
-  // 1. CRIAR RESERVA
+  // 1. CRIAR RESERVA (CORRIGIDO: FIXANDO MEIO-DIA)
   // ===========================================================================
   async create(dto: CreateReservationDto) {
     const space = await this.prisma.space.findUnique({
@@ -39,11 +39,29 @@ export class ReservationsService {
       throw new NotFoundException('Balada ou espaço não encontrados.');
     }
 
-    const checkDate = new Date(dto.date);
+    // 🐛 CORREÇÃO DE DATA (BUG DO FUSO HORÁRIO):
+    // Se receber "2025-12-19", forçamos "2025-12-19T12:00:00Z".
+    // 12:00 UTC - 3h (Brasil) = 09:00 AM (Ainda é dia 19).
+    // Se fosse 00:00 UTC - 3h = 21:00 PM (Dia 18 - ERRO).
+    const safeDateString = dto.date.includes('T')
+      ? dto.date
+      : `${dto.date}T12:00:00.000Z`;
+
+    const checkDate = new Date(safeDateString);
+
+    // Para verificar conflito, olhamos o dia inteiro (range 00:00 até 23:59)
+    const startOfDay = new Date(safeDateString);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(safeDateString);
+    endOfDay.setUTCHours(23, 59, 59, 999);
+
     const existingReservation = await this.prisma.reservation.findFirst({
       where: {
         spaceId: dto.spaceId,
-        date: checkDate,
+        date: {
+          gte: startOfDay,
+          lte: endOfDay,
+        },
         status: { not: 'CANCELED' },
       },
     });
@@ -70,7 +88,7 @@ export class ReservationsService {
         customerName: dto.customerName,
         customerPhone: dto.customerPhone,
         customerEmail: dto.customerEmail,
-        date: checkDate,
+        date: checkDate, // Salva com horário seguro (12:00 UTC)
         notes: dto.notes,
         isBirthday: dto.isBirthday || false,
         birthdayDate: dto.birthdayDate ? new Date(dto.birthdayDate) : null,
@@ -101,12 +119,24 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 2. LISTAR RESERVAS
+  // 2. LISTAR RESERVAS (CORRIGIDO: FILTRO POR INTERVALO)
   // ===========================================================================
   async findAll(date?: string, nightclubId?: string) {
     const where: any = {};
     if (nightclubId) where.nightclubId = nightclubId;
-    if (date) where.date = new Date(date);
+
+    if (date) {
+      // 🐛 CORREÇÃO NO FILTRO:
+      // Busca tudo entre 00:00 e 23:59 do dia solicitado em UTC.
+      // Isso garante que pegamos reservas salvas às 00:00 (antigas) e às 12:00 (novas).
+      const startOfDay = new Date(`${date}T00:00:00.000Z`);
+      const endOfDay = new Date(`${date}T23:59:59.999Z`);
+
+      where.date = {
+        gte: startOfDay,
+        lte: endOfDay,
+      };
+    }
 
     return this.prisma.reservation.findMany({
       where,
