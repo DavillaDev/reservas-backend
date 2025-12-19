@@ -320,27 +320,51 @@ export class ReservationsService {
     });
   }
 
-  // 7. CRON JOB:  LIMPEZA AUTOMÁTICA DE RESERVAS EXPIRADAS
+  // ===========================================================================
+  // 7. CRON JOB: LIMPEZA AUTOMÁTICA (COM LOGS DE DIAGNÓSTICO)
+  // ===========================================================================
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
     const now = new Date();
 
-    // Busca e atualiza todas as reservas PENDENTES que já venceram
-    const result = await this.prisma.reservation.updateMany({
+    // 1. Log para saber que o CRON está vivo e qual a hora no servidor
+    console.log(
+      `[CRON] 🕒 Verificando expiração em: ${now.toISOString()} (UTC)`,
+    );
+
+    // 2. Diagnóstico: Quantas pendentes existem no total?
+    const totalPending = await this.prisma.reservation.count({
+      where: { status: 'PENDING' },
+    });
+
+    // 3. Diagnóstico: Quantas já venceram?
+    const expiredCount = await this.prisma.reservation.count({
       where: {
         status: 'PENDING',
-        paymentDeadline: {
-          lt: now, // "lt" significa "less than" (menor que agora)
-        },
-      },
-      data: {
-        status: 'CANCELED', // Cancela a reserva
+        paymentDeadline: { lt: now },
       },
     });
 
-    if (result.count > 0) {
+    console.log(
+      `[CRON] 📊 Diagnóstico: ${totalPending} pendentes no total. ${expiredCount} já venceram.`,
+    );
+
+    // 4. Executa a limpeza se houver vencidas
+    if (expiredCount > 0) {
+      const result = await this.prisma.reservation.updateMany({
+        where: {
+          status: 'PENDING',
+          paymentDeadline: {
+            lt: now, // "lt" significa "less than" (menor que agora)
+          },
+        },
+        data: {
+          status: 'CANCELED', // Cancela a reserva
+        },
+      });
+
       console.log(
-        `[CRON] 🧹 Limpeza: ${result.count} reservas expiradas foram canceladas.`,
+        `[CRON] 🧹 LIXEIRA: ${result.count} reservas expiradas foram canceladas agora.`,
       );
     }
   }
