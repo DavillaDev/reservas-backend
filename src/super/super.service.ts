@@ -5,7 +5,7 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 // 🔑 NOVA IMPORTAÇÃO: O DTO de Onboarding

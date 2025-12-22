@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { NightclubsService } from './nightclubs.service';
 import { NightclubsController } from './nightclubs.controller';
-import { PrismaService } from '../prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { MasterAuthGuard } from '../super/guards/master-auth.guard';
 import { ConfigModule } from '@nestjs/config';
 

@@ -5,7 +5,7 @@ import {
   InternalServerErrorException,
   BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { CreateSpaceDto } from './dto/create-space.dto';
 import { UpdateSpaceDto } from './dto/update-space.dto';
 // 🔑 IMPORTANTE: Importar o Enum gerado pelo Prisma
