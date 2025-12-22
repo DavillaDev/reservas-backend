@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config'; // 👈 ADICIONE ESTA LINHA
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { PrismaService } from './prisma.service';
+import { PrismaService } from '.././prisma/prisma.service';
 import { NightclubsModule } from './nightclubs/nightclubs.module';
 import { SpacesModule } from './spaces/spaces.module';
 import { ReservationsModule } from './reservations/reservations.module';
@@ -16,9 +16,11 @@ import { CloudinaryService } from './cloudinary.service';
 import { SuperController } from './super/super.controller';
 import { SuperService } from './super/super.service';
 import { ScheduleModule } from '@nestjs/schedule';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
   imports: [
+    PrismaModule,
     ScheduleModule.forRoot(),
     // 🛡️ Inicializa o ConfigModule globalmente para todos os outros módulos
     ConfigModule.forRoot({ isGlobal: true }),

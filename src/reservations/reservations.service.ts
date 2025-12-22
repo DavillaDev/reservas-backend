@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
-import { PrismaService } from '../prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { MercadoPagoConfig, Payment } from 'mercadopago';
 import { addMinutes, isAfter } from 'date-fns';
