@@ -358,49 +358,31 @@ export class ReservationsService {
   // ===========================================================================
   // 7. CRON JOB: LIMPEZA AUTOMÁTICA (COM LOGS DE DIAGNÓSTICO)
   // ===========================================================================
+
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
     const now = new Date();
 
-    // 1. Log para saber que o CRON está vivo e qual a hora no servidor
-    console.log(
-      `[CRON] 🕒 Verificando expiração em: ${now.toISOString()} (UTC)`,
-    );
-
-    // 2. Diagnóstico: Quantas pendentes existem no total?
-    const totalPending = await this.prisma.reservation.count({
-      where: { status: 'PENDING' },
-    });
-
-    // 3. Diagnóstico: Quantas já venceram?
-    const expiredCount = await this.prisma.reservation.count({
-      where: {
-        status: 'PENDING',
-        paymentDeadline: { lt: now },
-      },
-    });
-
-    console.log(
-      `[CRON] 📊 Diagnóstico: ${totalPending} pendentes no total. ${expiredCount} já venceram.`,
-    );
-
-    // 4. Executa a limpeza se houver vencidas
-    if (expiredCount > 0) {
+    try {
       const result = await this.prisma.reservation.updateMany({
         where: {
           status: 'PENDING',
           paymentDeadline: {
-            lt: now, // "lt" significa "less than" (menor que agora)
+            lt: now,
           },
         },
         data: {
-          status: 'CANCELED', // Cancela a reserva
+          status: 'CANCELED',
         },
       });
 
-      console.log(
-        `[CRON] 🧹 LIXEIRA: ${result.count} reservas expiradas foram canceladas agora.`,
-      );
+      if (result.count > 0) {
+        console.log(
+          `[CRON] 🧹 ${result.count} reservas expiradas foram canceladas (${now.toISOString()})`,
+        );
+      }
+    } catch (error) {
+      console.error('[CRON] ❌ Erro ao cancelar reservas expiradas', error);
     }
   }
 
