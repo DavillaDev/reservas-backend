@@ -1,7 +1,10 @@
+// src/super/super.service.ts (VERSÃO FINAL COMPLETA)
+
 import {
   Injectable,
   ConflictException,
   BadRequestException,
+  NotFoundException, // 🟢 Importante para o Reset de Senha
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
@@ -13,13 +16,15 @@ import { classToPlain } from 'class-transformer';
 export class SuperService {
   constructor(private prisma: PrismaService) {}
 
-  // --- 1. DASHBOARD INTELIGENTE ---
+  // ===========================================================================
+  // 1. DASHBOARD INTELIGENTE (Gráficos + Logs + Lista)
+  // ===========================================================================
   async getDashboardData() {
     // Definir intervalo de 30 dias para o gráfico
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    // Executa as 3 consultas pesadas em paralelo para performance máxima
+    // Executa as 3 consultas pesadas em paralelo
     const [nightclubs, chartReservations, recentLogs] = await Promise.all([
       // A. Busca Lista de Baladas e Totais Gerais
       this.prisma.nightclub.findMany({
@@ -86,13 +91,14 @@ export class SuperService {
         owner: club.users[0]
           ? `${club.users[0].name} (${club.users[0].email})`
           : 'Sem Dono',
-        users: club.users,
+        users: club.users, // Envia lista de users para pegar o email no front
         revenue: clubRevenue,
         reservationsCount: club._count.reservations,
         createdAt: club.createdAt,
         settings: {
           appFeePercent: settings?.appFeePercent || 5,
           clubFeePercent: settings?.clubFeePercent || 95,
+          openingDays: settings?.openingDays || [],
         },
       };
     });
@@ -128,7 +134,7 @@ export class SuperService {
 
         const current = chartMap.get(key);
 
-        // CORREÇÃO DO ERRO TS(18048) AQUI 👇
+        // Verificação de segurança TS
         if (current) {
           chartMap.set(key, {
             revenue: current.revenue + amount,
@@ -138,7 +144,6 @@ export class SuperService {
       }
     });
 
-    // Converte Map para Array
     const history = Array.from(chartMap, ([name, value]) => ({
       name,
       ...value,
@@ -156,7 +161,6 @@ export class SuperService {
       }),
     }));
 
-    // RETORNO
     return {
       stats: {
         totalClubs: nightclubs.length,
@@ -169,7 +173,9 @@ export class SuperService {
     };
   }
 
-  // --- 2. CRIAR CLIENTE (ONBOARDING) ---
+  // ===========================================================================
+  // 2. CRIAR CLIENTE (ONBOARDING)
+  // ===========================================================================
   async onboardClient(data: OnboardClubDto) {
     const { clubName, slug, ownerName, ownerEmail, ownerPassword, settings } =
       data;
@@ -220,5 +226,33 @@ export class SuperService {
 
       return { nightclub, user };
     });
+  }
+
+  // ===========================================================================
+  // 3. RESETAR SENHA DO CLIENTE (ADMIN FORCE) 🔑 [NOVO]
+  // ===========================================================================
+  async resetClubPassword(clubId: string, newPass: string) {
+    // 1. Acha a balada e o dono
+    const club = await this.prisma.nightclub.findUnique({
+      where: { id: clubId },
+      include: { users: { where: { role: 'OWNER' } } },
+    });
+
+    if (!club || !club.users[0]) {
+      throw new NotFoundException(
+        'Cliente ou Dono não encontrado para esta balada.',
+      );
+    }
+
+    // 2. Criptografa a nova senha
+    const hashedPassword = await bcrypt.hash(newPass, 10);
+
+    // 3. Salva a nova senha no banco
+    await this.prisma.user.update({
+      where: { id: club.users[0].id },
+      data: { password: hashedPassword },
+    });
+
+    return { message: 'Senha redefinida com sucesso.' };
   }
 }
