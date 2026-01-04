@@ -23,7 +23,7 @@ export class ReservationsService {
   ) {}
 
   // ===========================================================================
-  // 1. CRIAR RESERVA (CORRIGIDO: FIXANDO MEIO-DIA)
+  // 1. CRIAR RESERVA (AGORA COM TRAVA DE DIAS DE FUNCIONAMENTO 🔒)
   // ===========================================================================
   async create(dto: CreateReservationDto) {
     const space = await this.prisma.space.findUnique({
@@ -40,14 +40,39 @@ export class ReservationsService {
     }
 
     // 🐛 CORREÇÃO DE DATA (BUG DO FUSO HORÁRIO):
-    // Se receber "2025-12-19", forçamos "2025-12-19T12:00:00Z".
-    // 12:00 UTC - 3h (Brasil) = 09:00 AM (Ainda é dia 19).
-    // Se fosse 00:00 UTC - 3h = 21:00 PM (Dia 18 - ERRO).
     const safeDateString = dto.date.includes('T')
       ? dto.date
       : `${dto.date}T12:00:00.000Z`;
 
     const checkDate = new Date(safeDateString);
+
+    // =========================================================================
+    // 🔒 NOVA VERIFICAÇÃO: DIAS DE FUNCIONAMENTO
+    // =========================================================================
+    const settings = (nightclub.settings as any) || {};
+    const openingDays = settings.openingDays as number[]; // Ex: [5, 6] para Sex e Sab
+
+    // Se 'openingDays' existir e tiver dados, verificamos
+    if (openingDays && openingDays.length > 0) {
+      const dayOfWeek = checkDate.getDay(); // 0 (Dom) a 6 (Sáb)
+
+      if (!openingDays.includes(dayOfWeek)) {
+        // Mapeia para nome amigável só para a mensagem de erro
+        const dayNames = [
+          'Domingo',
+          'Segunda',
+          'Terça',
+          'Quarta',
+          'Quinta',
+          'Sexta',
+          'Sábado',
+        ];
+        throw new BadRequestException(
+          `A casa não abre neste dia (${dayNames[dayOfWeek]}). Dias disponíveis: ${openingDays.map((d) => dayNames[d]).join(', ')}.`,
+        );
+      }
+    }
+    // =========================================================================
 
     // Para verificar conflito, olhamos o dia inteiro (range 00:00 até 23:59)
     const startOfDay = new Date(safeDateString);
@@ -73,7 +98,8 @@ export class ReservationsService {
     }
 
     const price = Number(space.price || 0);
-    const settings = (nightclub.settings as any) || {};
+
+    // Configurações de pagamento
     const paymentActive = settings?.payment_active !== false;
     const requiresPayment = price > 0 && paymentActive;
 
@@ -88,7 +114,7 @@ export class ReservationsService {
         customerName: dto.customerName,
         customerPhone: dto.customerPhone,
         customerEmail: dto.customerEmail,
-        date: checkDate, // Salva com horário seguro (12:00 UTC)
+        date: checkDate,
         notes: dto.notes,
         isBirthday: dto.isBirthday || false,
         birthdayDate: dto.birthdayDate ? new Date(dto.birthdayDate) : null,
@@ -119,16 +145,13 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 2. LISTAR RESERVAS (CORRIGIDO: FILTRO POR INTERVALO)
+  // 2. LISTAR RESERVAS
   // ===========================================================================
   async findAll(date?: string, nightclubId?: string) {
     const where: any = {};
     if (nightclubId) where.nightclubId = nightclubId;
 
     if (date) {
-      // 🐛 CORREÇÃO NO FILTRO:
-      // Busca tudo entre 00:00 e 23:59 do dia solicitado em UTC.
-      // Isso garante que pegamos reservas salvas às 00:00 (antigas) e às 12:00 (novas).
       const startOfDay = new Date(`${date}T00:00:00.000Z`);
       const endOfDay = new Date(`${date}T23:59:59.999Z`);
 
@@ -146,7 +169,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 3. CHECKOUT (Interface para o Frontend)
+  // 3. CHECKOUT
   // ===========================================================================
   async getCheckoutData(id: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -179,7 +202,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 4. GERAR OU RECUPERAR PIX (MODO DIRETO)
+  // 4. GERAR OU RECUPERAR PIX
   // ===========================================================================
   async generatePix(reservationId: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -196,14 +219,12 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
 
-    // 🎯 MODO DIRETO: Prioriza o token da balada para o dinheiro cair lá
     const accessTokenParaUsar = settings.mpAccessToken || platformToken;
 
     const client = new MercadoPagoConfig({ accessToken: accessTokenParaUsar });
     const payment = new Payment(client);
 
     try {
-      // 🛡️ RECOVERY: Reaproveita PIX pendente para manter o cronômetro estável
       if (
         reservation.paymentId &&
         reservation.paymentDeadline &&
@@ -286,7 +307,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 5. WEBHOOK (APROVAÇÃO AUTOMÁTICA)
+  // 5. WEBHOOK
   // ===========================================================================
   async processWebhook(paymentId: string) {
     const reservation = await this.prisma.reservation.findFirst({
@@ -333,7 +354,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 6. CRUD E VALIDAÇÃO
+  // 6. CHECK-IN
   // ===========================================================================
   async checkInByToken(token: string) {
     const reservation = await this.prisma.reservation.findFirst({
@@ -344,26 +365,43 @@ export class ReservationsService {
     if (reservation.status === 'CHECKED_IN')
       throw new ConflictException('Já foi validado.');
 
-    // ✅ CORREÇÃO AQUI: Adicionamos o 'include' para o Frontend receber o nome do espaço
     return this.prisma.reservation.update({
       where: { id: reservation.id },
       data: { status: 'CHECKED_IN', checkInAt: new Date() },
       include: {
-        space: true, // <--- Isso traz o nome do Espaço (Camarote, Mesa, etc)
-        nightclub: true, // <--- Isso traz o nome da Balada
+        space: true,
+        nightclub: true,
       },
     });
   }
 
   // ===========================================================================
-  // 7. CRON JOB: LIMPEZA AUTOMÁTICA (COM LOGS DE DIAGNÓSTICO)
+  // 7. CRON JOB
   // ===========================================================================
-
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
     const now = new Date();
 
-    try {
+    console.log(
+      `[CRON] 🕒 Verificando expiração em: ${now.toISOString()} (UTC)`,
+    );
+
+    const totalPending = await this.prisma.reservation.count({
+      where: { status: 'PENDING' },
+    });
+
+    const expiredCount = await this.prisma.reservation.count({
+      where: {
+        status: 'PENDING',
+        paymentDeadline: { lt: now },
+      },
+    });
+
+    console.log(
+      `[CRON] 📊 Diagnóstico: ${totalPending} pendentes no total. ${expiredCount} já venceram.`,
+    );
+
+    if (expiredCount > 0) {
       const result = await this.prisma.reservation.updateMany({
         where: {
           status: 'PENDING',
@@ -376,13 +414,9 @@ export class ReservationsService {
         },
       });
 
-      if (result.count > 0) {
-        console.log(
-          `[CRON] 🧹 ${result.count} reservas expiradas foram canceladas (${now.toISOString()})`,
-        );
-      }
-    } catch (error) {
-      console.error('[CRON] ❌ Erro ao cancelar reservas expiradas', error);
+      console.log(
+        `[CRON] 🧹 LIXEIRA: ${result.count} reservas expiradas foram canceladas agora.`,
+      );
     }
   }
 
