@@ -29,6 +29,7 @@
     "@nestjs/platform-express": "^11.1.9",
     "@nestjs/schedule": "^6.1.0",
     "@nestjs/serve-static": "^5.0.4",
+    "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^5.22.0",
     "@types/streamifier": "^0.1.2",
     "axios": "^1.13.2",

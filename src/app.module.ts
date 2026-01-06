@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config'; // 👈 ADICIONE ESTA LINHA
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaService } from '.././prisma/prisma.service';
@@ -8,6 +8,10 @@ import { SpacesModule } from './spaces/spaces.module';
 import { ReservationsModule } from './reservations/reservations.module';
 import { AuthModule } from './auth/auth.module';
 import { UploadController } from './upload.controller';
+
+// 🛡️ Segurança: Rate Limit
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 
 // 🛡️ Cloudinary
 import { CloudinaryService } from './cloudinary.service';
@@ -22,19 +26,32 @@ import { PrismaModule } from '../prisma/prisma.module';
   imports: [
     PrismaModule,
     ScheduleModule.forRoot(),
-    // 🛡️ Inicializa o ConfigModule globalmente para todos os outros módulos
     ConfigModule.forRoot({ isGlobal: true }),
+
+    // 🛡️ Configuração do Rate Limit: 10 requisições por minuto por IP
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000,
+        limit: 10,
+      },
+    ]),
+
     NightclubsModule,
     SpacesModule,
     ReservationsModule,
     AuthModule,
   ],
-  controllers: [
-    AppController,
-    UploadController,
-    SuperController,
-    // ❌ NightclubsController removido daqui para evitar o erro de dependência (UnknownDependencies)
+  controllers: [AppController, UploadController, SuperController],
+  providers: [
+    AppService,
+    PrismaService,
+    SuperService,
+    CloudinaryService,
+    // 🛡️ Aplica a proteção do Throttler globalmente em todas as rotas
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
-  providers: [AppService, PrismaService, SuperService, CloudinaryService],
 })
 export class AppModule {}
