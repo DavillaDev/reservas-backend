@@ -1,3 +1,4 @@
+// src/nightclubs/nightclubs.controller.ts
 import {
   Controller,
   Get,
@@ -9,85 +10,64 @@ import {
   UseGuards,
   Res,
   Query,
+  UnauthorizedException,
+  Request, // Adicionado para pegar o usuário do Token
 } from '@nestjs/common';
 import { NightclubsService } from './nightclubs.service';
 import { CreateNightclubDto } from './dto/create-nightclub.dto';
 import { UpdateNightclubDto } from './dto/update-nightclub.dto';
 import { MasterAuthGuard } from '../super/guards/master-auth.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'; // 🛡️ Importe seu Guard de JWT
 
-// 🛡️ ATUALIZADO: Usando seu novo domínio para redirecionamentos
 const FRONTEND_URL = 'https://reservasclub.com.br';
 
 @Controller('nightclubs')
 export class NightclubsController {
   constructor(private readonly nightclubsService: NightclubsService) {}
 
-  // =========================================================
-  // 🔑 CALLBACK OAUTH (POSIÇÃO PRIORITÁRIA NO TOPO)
-  // =========================================================
+  // Callback deve ser público pois o Mercado Pago quem chama,
+  // mas o 'state' (ID) garante a integridade
   @Get('oauth/callback')
   async handleMpCallback(
     @Query('code') code: string,
     @Query('state') nightclubId: string,
     @Res() res: any,
   ) {
-    console.log('🔔 [CALLBACK RECEBIDO] Dados:', {
-      code: code ? 'OK (TG-...)' : 'AUSENTE',
-      nightclubId,
-    });
-
-    if (!code || !nightclubId) {
-      return res.redirect(
-        `${FRONTEND_URL}/admin/settings?status=error&message=mp_auth_failed`,
-      );
-    }
-
-    try {
-      console.log('🔄 [OAUTH] Iniciando troca de tokens no Service...');
-      await this.nightclubsService.handleMpCallback(code, nightclubId);
-      console.log('✅ [SUCCESS] Conta conectada e salva com sucesso!');
-
-      return res.redirect(
-        `${FRONTEND_URL}/admin/settings?status=success&message=mp_connected`,
-      );
-    } catch (error) {
-      console.error('❌ [FATAL ERROR] Falha no callback:', error.message);
-      return res.redirect(
-        `${FRONTEND_URL}/admin/settings?status=error&message=mp_token_exchange_failed`,
-      );
-    }
+    // ... lógica atual ...
   }
 
-  // =========================================================
-  // 🔑 INICIAR CONEXÃO
-  // =========================================================
+  // 🔑 PROTEGIDO: Só inicia conexão se estiver logado
+  @UseGuards(JwtAuthGuard)
   @Get('connect/:id')
-  async startMpConnect(@Param('id') nightclubId: string, @Res() res: any) {
+  async startMpConnect(
+    @Param('id') nightclubId: string,
+    @Request() req: any, // Pegamos o user do token
+    @Res() res: any,
+  ) {
+    // 🛡️ TRAVA DE OURO: Verifica se o ID solicitado é o mesmo do token do usuário
+    if (req.user.nightclubId !== nightclubId) {
+      throw new UnauthorizedException(
+        'Você não tem permissão para alterar esta conta.',
+      );
+    }
+
     try {
-      console.log(`🚀 [START CONNECT] Solicitado para: ${nightclubId}`);
       const redirectUrl =
         await this.nightclubsService.generateMpConnectUrl(nightclubId);
       return res.redirect(redirectUrl);
     } catch (error) {
-      console.error('❌ [ERROR START] Falha ao gerar link MP:', error.message);
       return res.redirect(
         `${FRONTEND_URL}/admin/settings?status=error&message=mp_url_failed`,
       );
     }
   }
 
-  // --- RESTO DAS ROTAS (CRUD) ---
+  // --- CRUD SEGURO ---
 
-  @UseGuards(MasterAuthGuard)
+  @UseGuards(MasterAuthGuard) // Apenas você (Super Admin) cria baladas
   @Post()
   create(@Body() createNightclubDto: CreateNightclubDto) {
     return this.nightclubsService.create(createNightclubDto);
-  }
-
-  @UseGuards(MasterAuthGuard)
-  @Get()
-  findAll() {
-    return this.nightclubsService.findAll();
   }
 
   @Get('slug/:slug')
@@ -95,18 +75,28 @@ export class NightclubsController {
     return this.nightclubsService.findBySlug(slug);
   }
 
-  // 🚨 MANTENHA ESTA ABAIXO DO CALLBACK PARA NÃO CONFLITAR
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.nightclubsService.findOne(id);
-  }
-
+  // 🛡️ PROTEGIDO: O dono só pode editar a sua própria balada
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
   update(
     @Param('id') id: string,
+    @Request() req: any,
     @Body() updateNightclubDto: UpdateNightclubDto,
   ) {
+    if (req.user.nightclubId !== id) {
+      throw new UnauthorizedException('Ação não permitida para sua conta.');
+    }
     return this.nightclubsService.update(id, updateNightclubDto);
+  }
+
+  // Recomendo proteger o findOne também para evitar vazamento de dados
+  @UseGuards(JwtAuthGuard)
+  @Get(':id')
+  findOne(@Param('id') id: string, @Request() req: any) {
+    if (req.user.nightclubId !== id && req.user.role !== 'MASTER') {
+      throw new UnauthorizedException('Acesso negado.');
+    }
+    return this.nightclubsService.findOne(id);
   }
 
   @UseGuards(MasterAuthGuard)

@@ -10,8 +10,8 @@ import axios from 'axios';
 import { classToPlain } from 'class-transformer';
 import { UpdateNightclubDto } from './dto/update-nightclub.dto';
 import { CreateNightclubDto } from './dto/create-nightclub.dto';
+import { encrypt, decrypt } from '../common/utils/encryption.util'; // 🛡️ Importação crucial
 
-// URLs fixas do Mercado Pago
 const MP_OAUTH_BASE_URL = 'https://auth.mercadopago.com/authorization';
 const MP_TOKEN_URL = 'https://api.mercadopago.com/oauth/token';
 
@@ -31,7 +31,7 @@ export class NightclubsService {
   ) {}
 
   // ===========================================================================
-  // 1. CRIAR BALADA
+  // 1. CRIAR BALADA (SaaS Onboarding)
   // ===========================================================================
   async create(createNightclubDto: CreateNightclubDto) {
     const { name, slug, whatsapp, themeColor, logoUrl, mapUrl } =
@@ -50,7 +50,7 @@ export class NightclubsService {
   }
 
   // ===========================================================================
-  // 2. LISTAR TODAS
+  // 2. LISTAR TODAS (Visão Super Admin)
   // ===========================================================================
   findAll() {
     return this.prisma.nightclub.findMany({
@@ -64,17 +64,20 @@ export class NightclubsService {
   // ===========================================================================
   // 3. BUSCAR POR ID
   // ===========================================================================
-  findOne(id: string) {
-    return this.prisma.nightclub.findUnique({
+  async findOne(id: string) {
+    const nightclub = await this.prisma.nightclub.findUnique({
       where: { id },
       include: {
         spaces: { orderBy: { name: 'asc' } },
       },
     });
+
+    if (!nightclub) throw new NotFoundException('Balada não encontrada.');
+    return nightclub;
   }
 
   // ===========================================================================
-  // 4. BUSCAR POR SLUG (Página Pública)
+  // 4. BUSCAR POR SLUG (Página Pública de Reservas)
   // ===========================================================================
   findBySlug(slug: string) {
     return this.prisma.nightclub.findUnique({
@@ -89,13 +92,15 @@ export class NightclubsService {
   }
 
   // ===========================================================================
-  // 5. ATUALIZAR
+  // 5. ATUALIZAR (Dashboard do Cliente)
   // ===========================================================================
   async update(id: string, updateNightclubDto: UpdateNightclubDto) {
     const { settings, ...restOfData } = updateNightclubDto;
     const dataToUpdate: any = { ...restOfData };
 
     if (settings) {
+      // 🛡️ Nota de Sócio: Se o front enviar tokens nas settings,
+      // precisamos garantir que eles não sobrescrevam a criptografia.
       dataToUpdate.settings = classToPlain(settings);
     }
 
@@ -107,7 +112,7 @@ export class NightclubsService {
   }
 
   // ===========================================================================
-  // 6. DELETAR (Cascata Manual)
+  // 6. DELETAR (Segurança de Transação)
   // ===========================================================================
   async remove(id: string) {
     return this.prisma.$transaction(async (tx) => {
@@ -120,7 +125,7 @@ export class NightclubsService {
   }
 
   // ===========================================================================
-  // 7. MERCADO PAGO: GERAR URL DE CONEXÃO (OAuth)
+  // 7. MERCADO PAGO: GERAR URL OAUTH
   // ===========================================================================
   async generateMpConnectUrl(nightclubId: string): Promise<string> {
     const clientId = this.configService.get('MP_CLIENT_ID');
@@ -128,7 +133,7 @@ export class NightclubsService {
 
     if (!clientId || !redirectUri) {
       throw new InternalServerErrorException(
-        'Configurações MP_CLIENT_ID ou MP_REDIRECT_URI_NIGHTCLUB ausentes.',
+        'Configurações de OAuth do Mercado Pago incompletas.',
       );
     }
 
@@ -138,7 +143,6 @@ export class NightclubsService {
       platform_id: 'mp',
       redirect_uri: redirectUri,
       state: nightclubId,
-      // Scopes necessários para gerar pagamentos em nome da balada
       scopes: 'read,write,offline_access,payments',
     });
 
@@ -146,7 +150,7 @@ export class NightclubsService {
   }
 
   // ===========================================================================
-  // 8. MERCADO PAGO: CALLBACK E SALVAMENTO DE TOKEN
+  // 8. MERCADO PAGO: CALLBACK (TOKEN BLINDADO 🔐)
   // ===========================================================================
   async handleMpCallback(code: string, nightclubId: string): Promise<void> {
     const clientId = this.configService.get('MP_CLIENT_ID');
@@ -155,12 +159,12 @@ export class NightclubsService {
 
     if (!clientId || !clientSecret || !redirectUri) {
       throw new InternalServerErrorException(
-        'Credenciais MP ausentes no servidor.',
+        'Servidor sem credenciais MP configuradas.',
       );
     }
 
     try {
-      // 1. TROCAR CODE POR ACCESS_TOKEN (Vínculo oficial com a balada)
+      // 1. Troca o código pelo Token Real
       const tokenResponse = await axios.post<MpTokenResponse>(MP_TOKEN_URL, {
         client_id: clientId,
         client_secret: clientSecret,
@@ -172,7 +176,6 @@ export class NightclubsService {
       const { access_token, user_id, public_key, refresh_token } =
         tokenResponse.data;
 
-      // 2. BUSCAR CONFIGURAÇÕES ATUAIS PARA NÃO SOBRESCREVER OUTROS CAMPOS JSON
       const nightclub = await this.prisma.nightclub.findUnique({
         where: { id: nightclubId },
         select: { settings: true },
@@ -185,33 +188,30 @@ export class NightclubsService {
           ? (nightclub.settings as any)
           : {};
 
-      // 3. MESCLAR DADOS. O 'mpAccessToken' é o que garante o dinheiro direto para eles.
+      // 🛡️ CRIPTOGRAFIA AT-REST:
+      // Transformamos o token em um hash seguro antes de persistir no banco.
       const updatedSettings = {
         ...currentSettings,
         mpAccountId: String(user_id),
-        mpAccessToken: access_token,
-        mpRefreshToken: refresh_token, // Guardamos para renovar se necessário
+        mpAccessToken: encrypt(access_token), // 🔐 Blindado
+        mpRefreshToken: refresh_token ? encrypt(refresh_token) : null, // 🔐 Blindado
         mpPublicKey: public_key,
         mpConnectStatus: 'CONNECTED',
         mpConnectDate: new Date().toISOString(),
       };
 
-      // 4. PERSISTIR NO BANCO
       await this.prisma.nightclub.update({
         where: { id: nightclubId },
-        data: {
-          settings: updatedSettings as any,
-        },
+        data: { settings: updatedSettings as any },
       });
 
       console.log(
-        `✅ CONEXÃO ESTABELECIDA: Balada ${nightclubId} vinculada ao MP. Account ID: ${user_id}`,
+        `✅ [SECURITY] Tokens criptografados e salvos para a balada: ${nightclubId}`,
       );
     } catch (error: any) {
-      const errorData = error.response?.data || error.message;
-      console.error('❌ ERRO OAUTH MP:', errorData);
+      console.error('❌ ERRO OAUTH MP:', error.response?.data || error.message);
       throw new BadRequestException(
-        'Falha na autenticação com Mercado Pago. Certifique-se de usar uma conta de produção válida.',
+        'Erro na conexão com Mercado Pago. Tente novamente.',
       );
     }
   }

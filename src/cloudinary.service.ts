@@ -36,10 +36,6 @@ export class CloudinaryService implements OnModuleInit {
     // 3. Log de Conferência (Verifique se bate com o Painel)
     console.log('🔍 [CLOUDINARY CHECK]');
     console.log(`   Cloud Name: ${cloudName}`);
-    console.log(`   API Key:    ${apiKey}`);
-    console.log(
-      `   API Secret: ${apiSecret ? apiSecret.slice(0, 5) + '...' + apiSecret.slice(-5) : 'MISSING'}`,
-    );
   }
 
   // 4. Teste Automático ao Iniciar (Ping)

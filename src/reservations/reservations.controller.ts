@@ -1,3 +1,4 @@
+// src/reservations/reservations.controller.ts
 import {
   Controller,
   Get,
@@ -8,18 +9,22 @@ import {
   Delete,
   Query,
   HttpCode,
+  UseGuards,
+  Request,
+  UnauthorizedException,
   NotFoundException,
 } from '@nestjs/common';
 import { ReservationsService } from './reservations.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('reservations')
 export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
 
   // ===========================================================================
-  // 1. CRIAR NOVA RESERVA
+  // 1. PÚBLICO: Criar Reserva (Site/Checkout do Cliente)
   // ===========================================================================
   @Post()
   create(@Body() createReservationDto: CreateReservationDto) {
@@ -27,18 +32,18 @@ export class ReservationsController {
   }
 
   // ===========================================================================
-  // 2. LISTAR TODAS (Dashboard & Filtros)
+  // 2. PRIVADO: Listar Reservas (Dashboard Admin)
   // ===========================================================================
+  @UseGuards(JwtAuthGuard)
   @Get()
-  findAll(
-    @Query('date') date?: string,
-    @Query('nightclubId') nightclubId?: string,
-  ) {
+  async findAll(@Query('date') date: string, @Request() req: any) {
+    // 🛡️ Segurança: Ignoramos qualquer ID vindo da query e usamos o do TOKEN
+    const nightclubId = req.user.nightclubId;
     return this.reservationsService.findAll(date, nightclubId);
   }
 
   // ===========================================================================
-  // 3. CHECKOUT (Alimenta a tela de pagamento)
+  // 3. PÚBLICO: Dados de Checkout (Tela de Pagamento)
   // ===========================================================================
   @Get(':id/checkout')
   async getCheckoutData(@Param('id') id: string) {
@@ -46,74 +51,92 @@ export class ReservationsController {
   }
 
   // ===========================================================================
-  // 4. WEBHOOK REAL (Mercado Pago - Blindado)
+  // 4. PÚBLICO: Webhook Mercado Pago
   // ===========================================================================
   @Post('webhook')
-  @HttpCode(200) // MP exige 200 ou 201 para parar de reenviar
+  @HttpCode(200)
   async handleWebhook(@Body() body: any, @Query() query: any) {
-    // O MP pode enviar o ID em diferentes lugares dependendo da versão da API
     const paymentId =
       body?.data?.id || body?.id || query?.id || query?.['data.id'];
-
     const action = body?.action || body?.type || query?.topic;
 
-    console.log('🔔 [WEBHOOK] Recebido:', { paymentId, action });
-
-    // Verificamos se é uma notificação de pagamento aprovado ou criado
-    if (
-      paymentId &&
-      (action === 'payment' ||
-        action === 'payment.created' ||
-        action === 'payment.updated')
-    ) {
-      // Executa em background para não travar a resposta do MP
+    if (paymentId && (action === 'payment' || action?.includes('payment'))) {
       this.reservationsService
         .processWebhook(paymentId.toString())
-        .catch((err) =>
-          console.error(
-            '❌ [WEBHOOK_ERROR] Erro no processamento:',
-            err.message,
-          ),
-        );
+        .catch(console.error);
     }
-
     return { status: 'received' };
   }
 
   // ===========================================================================
-  // 5. PORTARIA / CHECK-IN (Validação de Ingresso via QR Code)
+  // 5. PRIVADO: Portaria (Check-in via QR Code)
   // ===========================================================================
+  @UseGuards(JwtAuthGuard)
   @Post('check-in/:token')
   checkInByToken(@Param('token') token: string) {
     return this.reservationsService.checkInByToken(token);
   }
 
   // ===========================================================================
-  // 6. GERAR PIX MANUALMENTE (Endpoint Auxiliar)
+  // 6. CRUD PRIVADO: Blindado contra acesso cruzado (Multi-tenancy)
   // ===========================================================================
-  @Post(':id/pix')
-  generatePix(@Param('id') id: string) {
-    return this.reservationsService.generatePix(id);
-  }
 
-  // ===========================================================================
-  // 7. CRUD PADRÃO
-  // ===========================================================================
+  @UseGuards(JwtAuthGuard)
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.reservationsService.findOne(id);
+  async findOne(@Param('id') id: string, @Request() req: any) {
+    const res = await this.reservationsService.findOne(id);
+
+    // 🛡️ Prevenção de erro null ts(18047)
+    if (!res) throw new NotFoundException('Reserva não encontrada.');
+
+    // 🛡️ Trava: Dono da Balada A não vê reserva da Balada B
+    if (res.nightclubId !== req.user.nightclubId) {
+      throw new UnauthorizedException('Acesso negado a esta reserva.');
+    }
+    return res;
   }
 
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
-  update(
+  async update(
     @Param('id') id: string,
     @Body() updateReservationDto: UpdateReservationDto,
+    @Request() req: any,
   ) {
+    const res = await this.reservationsService.findOne(id);
+
+    if (!res) throw new NotFoundException('Reserva não encontrada.');
+
+    if (res.nightclubId !== req.user.nightclubId) {
+      throw new UnauthorizedException(
+        'Você não tem permissão para editar esta reserva.',
+      );
+    }
     return this.reservationsService.update(id, updateReservationDto);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string, @Request() req: any) {
+    const res = await this.reservationsService.findOne(id);
+
+    if (!res) throw new NotFoundException('Reserva não encontrada.');
+
+    if (res.nightclubId !== req.user.nightclubId) {
+      throw new UnauthorizedException(
+        'Você não tem permissão para excluir esta reserva.',
+      );
+    }
     return this.reservationsService.remove(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/pix')
+  async generatePix(@Param('id') id: string, @Request() req: any) {
+    const res = await this.reservationsService.findOne(id);
+    if (!res || res.nightclubId !== req.user.nightclubId) {
+      throw new UnauthorizedException('Ação não permitida.');
+    }
+    return this.reservationsService.generatePix(id);
   }
 }

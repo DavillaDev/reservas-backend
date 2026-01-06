@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
@@ -13,6 +14,7 @@ import { addMinutes, isAfter } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { decrypt } from '../common/utils/encryption.util'; // 🛡️ Importação para abrir os tokens
 
 @Injectable()
 export class ReservationsService {
@@ -46,18 +48,13 @@ export class ReservationsService {
 
     const checkDate = new Date(safeDateString);
 
-    // =========================================================================
-    // 🔒 NOVA VERIFICAÇÃO: DIAS DE FUNCIONAMENTO
-    // =========================================================================
+    // 🔒 VERIFICAÇÃO: DIAS DE FUNCIONAMENTO
     const settings = (nightclub.settings as any) || {};
-    const openingDays = settings.openingDays as number[]; // Ex: [5, 6] para Sex e Sab
+    const openingDays = settings.openingDays as number[];
 
-    // Se 'openingDays' existir e tiver dados, verificamos
     if (openingDays && openingDays.length > 0) {
-      const dayOfWeek = checkDate.getDay(); // 0 (Dom) a 6 (Sáb)
-
+      const dayOfWeek = checkDate.getDay();
       if (!openingDays.includes(dayOfWeek)) {
-        // Mapeia para nome amigável só para a mensagem de erro
         const dayNames = [
           'Domingo',
           'Segunda',
@@ -72,9 +69,7 @@ export class ReservationsService {
         );
       }
     }
-    // =========================================================================
 
-    // Para verificar conflito, olhamos o dia inteiro (range 00:00 até 23:59)
     const startOfDay = new Date(safeDateString);
     startOfDay.setUTCHours(0, 0, 0, 0);
     const endOfDay = new Date(safeDateString);
@@ -83,10 +78,7 @@ export class ReservationsService {
     const existingReservation = await this.prisma.reservation.findFirst({
       where: {
         spaceId: dto.spaceId,
-        date: {
-          gte: startOfDay,
-          lte: endOfDay,
-        },
+        date: { gte: startOfDay, lte: endOfDay },
         status: { not: 'CANCELED' },
       },
     });
@@ -98,8 +90,6 @@ export class ReservationsService {
     }
 
     const price = Number(space.price || 0);
-
-    // Configurações de pagamento
     const paymentActive = settings?.payment_active !== false;
     const requiresPayment = price > 0 && paymentActive;
 
@@ -145,20 +135,19 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 2. LISTAR RESERVAS
+  // 2. LISTAR TODAS (Dashboard & Filtros - BLINDADO 🛡️)
   // ===========================================================================
   async findAll(date?: string, nightclubId?: string) {
-    const where: any = {};
-    if (nightclubId) where.nightclubId = nightclubId;
+    if (!nightclubId) {
+      throw new UnauthorizedException('Identificação da balada ausente.');
+    }
+
+    const where: any = { nightclubId };
 
     if (date) {
       const startOfDay = new Date(`${date}T00:00:00.000Z`);
       const endOfDay = new Date(`${date}T23:59:59.999Z`);
-
-      where.date = {
-        gte: startOfDay,
-        lte: endOfDay,
-      };
+      where.date = { gte: startOfDay, lte: endOfDay };
     }
 
     return this.prisma.reservation.findMany({
@@ -169,7 +158,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 3. CHECKOUT
+  // 3. CHECKOUT (Alimenta a tela de pagamento)
   // ===========================================================================
   async getCheckoutData(id: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -181,7 +170,7 @@ export class ReservationsService {
 
     if (
       reservation.status === 'CONFIRMED' ||
-      (reservation.status as string) === 'CHECKED_IN'
+      reservation.status === 'CHECKED_IN'
     ) {
       return { status: 'PAID', reservation };
     }
@@ -202,7 +191,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 4. GERAR OU RECUPERAR PIX
+  // 4. GERAR OU RECUPERAR PIX (COM DECRYPT 🔐)
   // ===========================================================================
   async generatePix(reservationId: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -219,7 +208,12 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
 
-    const accessTokenParaUsar = settings.mpAccessToken || platformToken;
+    // 🛡️ Lógica de Decrypt para o token criptografado no banco
+    const rawToken = settings.mpAccessToken;
+    const accessTokenParaUsar =
+      rawToken && rawToken.includes(':')
+        ? decrypt(rawToken)
+        : rawToken || platformToken;
 
     const client = new MercadoPagoConfig({ accessToken: accessTokenParaUsar });
     const payment = new Payment(client);
@@ -233,9 +227,6 @@ export class ReservationsService {
         try {
           const existing = await payment.get({ id: reservation.paymentId });
           if (existing.status === 'pending') {
-            console.log(
-              `[MP_RECOVERY] Reaproveitando PIX ativo: ${reservation.paymentId}`,
-            );
             return {
               qrCodeBase64:
                 existing.point_of_interaction?.transaction_data?.qr_code_base64,
@@ -268,15 +259,7 @@ export class ReservationsService {
         external_reference: reservation.id,
       };
 
-      console.log(
-        `[MP_FLOW] Gerando PIX via token: ${settings.mpAccessToken ? 'DA BALADA' : 'DA PLATAFORMA'}`,
-      );
-
       const response = await payment.create({ body: paymentBody });
-
-      console.log(
-        `[MP_SUCCESS] Collector ID Recebedor: ${response.collector_id}`,
-      );
 
       await this.prisma.reservation.update({
         where: { id: reservationId },
@@ -307,7 +290,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 5. WEBHOOK
+  // 5. WEBHOOK REAL (Mercado Pago - Blindado)
   // ===========================================================================
   async processWebhook(paymentId: string) {
     const reservation = await this.prisma.reservation.findFirst({
@@ -319,7 +302,13 @@ export class ReservationsService {
 
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-    const activeAccessToken = settings.mpAccessToken || platformToken;
+
+    // 🛡️ Decrypt no Webhook
+    const rawToken = settings.mpAccessToken;
+    const activeAccessToken =
+      rawToken && rawToken.includes(':')
+        ? decrypt(rawToken)
+        : rawToken || platformToken;
 
     const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
     const payment = new Payment(client);
@@ -329,17 +318,10 @@ export class ReservationsService {
 
       if (paymentData.status === 'approved') {
         const validationToken = uuidv4();
-
         const updated = await this.prisma.reservation.update({
           where: { id: reservation.id },
-          data: {
-            status: 'CONFIRMED',
-            validationToken,
-          },
-          include: {
-            space: true,
-            nightclub: true,
-          },
+          data: { status: 'CONFIRMED', validationToken },
+          include: { space: true, nightclub: true },
         });
 
         if (updated.customerEmail) {
@@ -354,84 +336,60 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 6. CHECK-IN
+  // 6. PORTARIA / CHECK-IN (BLINDADO 🔒)
   // ===========================================================================
-  async checkInByToken(token: string) {
-    const reservation = await this.prisma.reservation.findFirst({
-      where: { validationToken: token },
-    });
+  async checkInByToken(token: string, nightclubId?: string) {
+    const where: any = { validationToken: token };
 
-    if (!reservation) throw new NotFoundException('Token inválido.');
+    // 🛡️ Se o nightclubId for passado (pelo Controller protegido), filtramos por ele
+    if (nightclubId) where.nightclubId = nightclubId;
+
+    const reservation = await this.prisma.reservation.findFirst({ where });
+
+    if (!reservation)
+      throw new NotFoundException('Token inválido para esta unidade.');
     if (reservation.status === 'CHECKED_IN')
       throw new ConflictException('Já foi validado.');
 
     return this.prisma.reservation.update({
       where: { id: reservation.id },
       data: { status: 'CHECKED_IN', checkInAt: new Date() },
-      include: {
-        space: true,
-        nightclub: true,
-      },
+      include: { space: true, nightclub: true },
     });
   }
 
   // ===========================================================================
-  // 7. CRON JOB
+  // 7. CRON JOB (Limpeza Automática)
   // ===========================================================================
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
     const now = new Date();
-
-    console.log(
-      `[CRON] 🕒 Verificando expiração em: ${now.toISOString()} (UTC)`,
-    );
-
-    const totalPending = await this.prisma.reservation.count({
-      where: { status: 'PENDING' },
-    });
-
-    const expiredCount = await this.prisma.reservation.count({
+    const result = await this.prisma.reservation.updateMany({
       where: {
         status: 'PENDING',
         paymentDeadline: { lt: now },
       },
+      data: { status: 'CANCELED' },
     });
-
-    console.log(
-      `[CRON] 📊 Diagnóstico: ${totalPending} pendentes no total. ${expiredCount} já venceram.`,
-    );
-
-    if (expiredCount > 0) {
-      const result = await this.prisma.reservation.updateMany({
-        where: {
-          status: 'PENDING',
-          paymentDeadline: {
-            lt: now,
-          },
-        },
-        data: {
-          status: 'CANCELED',
-        },
-      });
-
-      console.log(
-        `[CRON] 🧹 LIXEIRA: ${result.count} reservas expiradas foram canceladas agora.`,
-      );
-    }
+    if (result.count > 0)
+      console.log(`[CRON] 🧹 ${result.count} reservas expiradas canceladas.`);
   }
 
-  findOne(id: string) {
+  // ===========================================================================
+  // 8. CRUD PADRÃO (Completos para não quebrar o Controller)
+  // ===========================================================================
+  async findOne(id: string) {
     return this.prisma.reservation.findUnique({
       where: { id },
       include: { space: true, nightclub: true },
     });
   }
 
-  update(id: string, dto: UpdateReservationDto) {
+  async update(id: string, dto: UpdateReservationDto) {
     return this.prisma.reservation.update({ where: { id }, data: dto });
   }
 
-  remove(id: string) {
+  async remove(id: string) {
     return this.prisma.reservation.delete({ where: { id } });
   }
 }
