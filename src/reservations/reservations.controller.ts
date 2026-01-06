@@ -32,6 +32,18 @@ export class ReservationsController {
   }
 
   // ===========================================================================
+  // 1.5 PÚBLICO: Checar Disponibilidade (Para o Mapa ficar Cinza) 🚨 NOVO!
+  // ===========================================================================
+  @Get('availability')
+  async checkAvailability(
+    @Query('nightclubId') nightclubId: string,
+    @Query('date') date: string,
+  ) {
+    // Retorna lista de IDs das mesas ocupadas ['uuid-1', 'uuid-2']
+    return this.reservationsService.getBookedSpaces(nightclubId, date);
+  }
+
+  // ===========================================================================
   // 2. PRIVADO: Listar Reservas (Dashboard Admin)
   // ===========================================================================
   @UseGuards(JwtAuthGuard)
@@ -86,10 +98,8 @@ export class ReservationsController {
   async findOne(@Param('id') id: string, @Request() req: any) {
     const res = await this.reservationsService.findOne(id);
 
-    // 🛡️ Prevenção de erro null ts(18047)
     if (!res) throw new NotFoundException('Reserva não encontrada.');
 
-    // 🛡️ Trava: Dono da Balada A não vê reserva da Balada B
     if (res.nightclubId !== req.user.nightclubId) {
       throw new UnauthorizedException('Acesso negado a esta reserva.');
     }

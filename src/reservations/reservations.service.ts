@@ -448,4 +448,25 @@ export class ReservationsService {
   async remove(id: string) {
     return this.prisma.reservation.delete({ where: { id } });
   }
+  // ===========================================================================
+  // 9. CHECAR DISPONIBILIDADE (Para pintar o mapa de cinza)
+  // ===========================================================================
+  async getBookedSpaces(nightclubId: string, dateString: string) {
+    // Garante o intervalo do dia inteiro (00:00 até 23:59)
+    // Assumindo que a data vem 'YYYY-MM-DD'
+    const startOfDay = new Date(`${dateString}T00:00:00.000Z`);
+    const endOfDay = new Date(`${dateString}T23:59:59.999Z`);
+
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        nightclubId,
+        date: { gte: startOfDay, lte: endOfDay },
+        status: { not: 'CANCELED' }, // Ignora os cancelados, esses estão livres!
+      },
+      select: { spaceId: true }, // Só precisamos saber o ID da mesa
+    });
+
+    // Retorna apenas um array simples: ['id-mesa-1', 'id-mesa-2']
+    return reservations.map((r) => r.spaceId);
+  }
 }
