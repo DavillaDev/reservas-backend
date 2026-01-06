@@ -10,19 +10,18 @@ datasource db {
 }
 
 // =========================================================
-// 1. USUÁRIOS (QUEM LOGA NO SISTEMA)
+// 1. USUÁRIOS (QUEM LOGA NO SISTEMA: ADMIN/STAFF)
 // =========================================================
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String   // Senha Hasheada (Bcrypt)
-  name      String
+  id          String   @id @default(uuid())
+  email       String   @unique
+  password    String   // Senha Hasheada (Bcrypt)
+  name        String
   
   // Controle de Acesso
-  role      UserRole @default(STAFF)
+  role        UserRole @default(STAFF)
   
   // Vínculo: A qual balada esse usuário pertence?
-  // (Se for null, e o role for SUPERADMIN, é você, Thulio)
   nightclubId String?
   nightclub   Nightclub? @relation(fields: [nightclubId], references: [id])
 
@@ -44,24 +43,23 @@ model Nightclub {
   themeColor  String?  @default("#697cafff")
   whatsapp    String
   
-  // SAAS & FINANCEIRO (O SEGREDO DO SPLIT)
-  // Define quanto (%) você morde de cada transação dessa balada
+  // SAAS & FINANCEIRO
   appFeePercent Decimal @default(5.0) 
   
-  // Token do Mercado Pago DELES (Para onde vai o dinheiro líquido)
+  // Token do Mercado Pago DELES
   mpAccessToken String? 
 
-  repassPixKey    String?
+  repassPixKey     String?
   repassPixKeyType String? // e.g., 'CPF', 'CNPJ', 'EMAIL', 'PHONE', 'EVP'
   
   // Configurações visuais e regras gerais
-  settings    Json?    
+  settings     Json?     
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   // Relações
-  users        User[]        // Dobre de usuários dessa balada
+  users        User[]        
   spaces       Space[]
   reservations Reservation[]
 
@@ -83,7 +81,7 @@ model Space {
   minConsumption Decimal?    @default(0.0)
 
   description    String?
-  mapPosition    Json?       
+  mapPosition    Json?        
 
   nightclub    Nightclub   @relation(fields: [nightclubId], references: [id])
   reservations Reservation[]
@@ -92,7 +90,28 @@ model Space {
 }
 
 // =========================================================
-// 4. AS RESERVAS (O DINHEIRO ENTRANDO)
+// 4. O CLIENTE (NOVO! BASE PARA O CRM E BLACKLIST)
+// =========================================================
+model Customer {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  phone     String
+  cpf       String?  @unique // CPF único para garantir o bloqueio real
+  
+  // 🚨 O Campo da Discórdia: Se true, o cliente não consegue reservar
+  isBlocked Boolean  @default(false)
+  
+  reservations Reservation[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("customers")
+}
+
+// =========================================================
+// 5. AS RESERVAS (ATUALIZADO COM RELAÇÃO AO CLIENTE)
 // =========================================================
 model Reservation {
   id            String            @id @default(uuid())
@@ -100,9 +119,14 @@ model Reservation {
   spaceId       String
   date          DateTime          @db.Date
   
+  // Dados Snapshots (Mantidos para histórico visual rápido)
   customerName  String
   customerPhone String
   customerEmail String?            
+  
+  // 🔗 VÍNCULO NOVO: Liga a reserva ao perfil único do cliente
+  customerId    String?           
+  customer      Customer?         @relation(fields: [customerId], references: [id])
   
   isBirthday    Boolean           @default(false) 
   birthdayDate  DateTime?         
@@ -110,15 +134,14 @@ model Reservation {
 
   status        ReservationStatus @default(PENDING)
   checkInTime   DateTime?
-  checkInAt       DateTime?
+  checkInAt     DateTime? // Mantive o seu original caso use em outro lugar
   validationToken String? @unique
 
-  
   // FINANCEIRO
   amount           Decimal?   @default(0.0)
   paymentId        String?    @unique 
   paymentCreatedAt DateTime?
-  paymentDeadline DateTime?
+  paymentDeadline  DateTime?
   
   createdAt      DateTime          @default(now())
 
@@ -133,9 +156,9 @@ model Reservation {
 // =========================================================
 
 enum UserRole {
-  SUPERADMIN // Você (Vê tudo)
-  OWNER      // Dono da Balada (Vê financeiro e configs)
-  STAFF      // Hostess/Portaria (Só vê lista e faz check-in)
+  SUPERADMIN 
+  OWNER      
+  STAFF      
 }
 
 enum SpaceType {
@@ -151,9 +174,10 @@ enum SpaceStatus {
 }
 
 enum ReservationStatus {
-  PENDING   
-  CONFIRMED 
-  CANCELED  
-  COMPLETED 
+  PENDING    
+  CONFIRMED  
+  CANCELED   
+  COMPLETED  
   CHECKED_IN
+  NO_SHOW     // 🚨 NOVO: Cliente reservou e não apareceu (Gatilho para banimento)
 }

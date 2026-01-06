@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   UnauthorizedException,
+  ForbiddenException, // 🚨 Mário: Importamos a Exceção de "Proibido"
 } from '@nestjs/common';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
@@ -14,7 +15,7 @@ import { addMinutes, isAfter } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { decrypt } from '../common/utils/encryption.util'; // 🛡️ Importação para abrir os tokens
+import { decrypt } from '../common/utils/encryption.util';
 
 @Injectable()
 export class ReservationsService {
@@ -25,7 +26,7 @@ export class ReservationsService {
   ) {}
 
   // ===========================================================================
-  // 1. CRIAR RESERVA (AGORA COM TRAVA DE DIAS DE FUNCIONAMENTO 🔒)
+  // 1. CRIAR RESERVA (COM BLACKLIST E CRM 🔒)
   // ===========================================================================
   async create(dto: CreateReservationDto) {
     const space = await this.prisma.space.findUnique({
@@ -41,7 +42,59 @@ export class ReservationsService {
       throw new NotFoundException('Balada ou espaço não encontrados.');
     }
 
-    // 🐛 CORREÇÃO DE DATA (BUG DO FUSO HORÁRIO):
+    if (!dto.customerEmail) {
+      throw new BadRequestException(
+        'O e-mail do cliente é obrigatório para a reserva.',
+      );
+    }
+    if (!dto.customerName) {
+      throw new BadRequestException('O nome do cliente é obrigatório.');
+    }
+    if (!dto.customerPhone) {
+      throw new BadRequestException('O telefone do cliente é obrigatório.');
+    }
+
+    // =================================================================
+    // 🕵️‍♂️ O LEÃO DE CHÁCARA (BLACKLIST & CRM)
+    // =================================================================
+
+    // 1. Busca o cliente pelo e-mail (RG Digital)
+    let customer = await this.prisma.customer.findUnique({
+      where: { email: dto.customerEmail },
+    });
+
+    // 2. 🚫 A BARREIRA: Se estiver na Lista Negra, tchau!
+    if (customer && customer.isBlocked) {
+      throw new ForbiddenException(
+        'Sua conta possui restrições administrativas. Por favor, entre em contato com a gerência pelo WhatsApp para regularizar sua situação.',
+      );
+    }
+
+    // 3. 📝 O CRM: Cadastra ou Atualiza automaticamente
+    if (!customer) {
+      // Cliente novo? Cria a ficha dele!
+      customer = await this.prisma.customer.create({
+        data: {
+          email: dto.customerEmail,
+          name: dto.customerName,
+          phone: dto.customerPhone,
+          // cpf: dto.cpf (Se você adicionar CPF no DTO depois, descomente aqui)
+        },
+      });
+    } else {
+      // Cliente antigo? Atualiza o telefone caso tenha mudado
+      await this.prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          name: dto.customerName,
+          phone: dto.customerPhone,
+        },
+      });
+    }
+
+    // =================================================================
+    // 🐛 CORREÇÃO DE DATA E LÓGICA PADRÃO
+    // =================================================================
     const safeDateString = dto.date.includes('T')
       ? dto.date
       : `${dto.date}T12:00:00.000Z`;
@@ -97,13 +150,18 @@ export class ReservationsService {
     const paymentDeadline = requiresPayment ? addMinutes(new Date(), 20) : null;
     const validationToken = !requiresPayment ? uuidv4() : null;
 
+    // 4. CRIA A RESERVA VINCULADA AO CLIENTE
     const reservation = await this.prisma.reservation.create({
       data: {
         nightclubId: dto.nightclubId,
         spaceId: dto.spaceId,
+        // Dados snapshot (para agilidade)
         customerName: dto.customerName,
         customerPhone: dto.customerPhone,
         customerEmail: dto.customerEmail,
+        // 🔗 O VÍNCULO SAGRADO
+        customerId: customer.id,
+
         date: checkDate,
         notes: dto.notes,
         isBirthday: dto.isBirthday || false,
@@ -152,13 +210,14 @@ export class ReservationsService {
 
     return this.prisma.reservation.findMany({
       where,
-      include: { space: true, nightclub: true },
+      // 🚨 Mário: Trazemos o customer também para você ver se ele está bloqueado na lista!
+      include: { space: true, nightclub: true, customer: true },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   // ===========================================================================
-  // 3. CHECKOUT (Alimenta a tela de pagamento)
+  // 3. CHECKOUT (Mantido igual)
   // ===========================================================================
   async getCheckoutData(id: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -191,7 +250,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 4. GERAR OU RECUPERAR PIX (COM DECRYPT 🔐)
+  // 4. GERAR PIX (Mantido igual)
   // ===========================================================================
   async generatePix(reservationId: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -208,7 +267,6 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
 
-    // 🛡️ Lógica de Decrypt para o token criptografado no banco
     const rawToken = settings.mpAccessToken;
     const accessTokenParaUsar =
       rawToken && rawToken.includes(':')
@@ -290,7 +348,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 5. WEBHOOK REAL (Mercado Pago - Blindado)
+  // 5. WEBHOOK (Mantido igual)
   // ===========================================================================
   async processWebhook(paymentId: string) {
     const reservation = await this.prisma.reservation.findFirst({
@@ -303,7 +361,6 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
 
-    // 🛡️ Decrypt no Webhook
     const rawToken = settings.mpAccessToken;
     const activeAccessToken =
       rawToken && rawToken.includes(':')
@@ -336,12 +393,11 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 6. PORTARIA / CHECK-IN (BLINDADO 🔒)
+  // 6. PORTARIA / CHECK-IN (Mantido igual)
   // ===========================================================================
   async checkInByToken(token: string, nightclubId?: string) {
     const where: any = { validationToken: token };
 
-    // 🛡️ Se o nightclubId for passado (pelo Controller protegido), filtramos por ele
     if (nightclubId) where.nightclubId = nightclubId;
 
     const reservation = await this.prisma.reservation.findFirst({ where });
@@ -359,7 +415,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 7. CRON JOB (Limpeza Automática)
+  // 7. CRON JOB (Mantido igual)
   // ===========================================================================
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
@@ -376,7 +432,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 8. CRUD PADRÃO (Completos para não quebrar o Controller)
+  // 8. CRUD PADRÃO
   // ===========================================================================
   async findOne(id: string) {
     return this.prisma.reservation.findUnique({

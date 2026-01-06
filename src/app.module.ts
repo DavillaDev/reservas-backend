@@ -21,6 +21,7 @@ import { SuperController } from './super/super.controller';
 import { SuperService } from './super/super.service';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from '../prisma/prisma.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
@@ -35,6 +36,8 @@ import { PrismaModule } from '../prisma/prisma.module';
         limit: 10,
       },
     ]),
+
+    CustomersModule,
 
     NightclubsModule,
     SpacesModule,
