@@ -4,7 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   UnauthorizedException,
-  ForbiddenException, // 🚨 Mário: Importamos a Exceção de "Proibido"
+  ForbiddenException,
 } from '@nestjs/common';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
@@ -54,35 +54,25 @@ export class ReservationsService {
       throw new BadRequestException('O telefone do cliente é obrigatório.');
     }
 
-    // =================================================================
-    // 🕵️‍♂️ O LEÃO DE CHÁCARA (BLACKLIST & CRM)
-    // =================================================================
-
-    // 1. Busca o cliente pelo e-mail (RG Digital)
     let customer = await this.prisma.customer.findUnique({
       where: { email: dto.customerEmail },
     });
 
-    // 2. 🚫 A BARREIRA: Se estiver na Lista Negra, tchau!
     if (customer && customer.isBlocked) {
       throw new ForbiddenException(
         'Sua conta possui restrições administrativas. Por favor, entre em contato com a gerência pelo WhatsApp para regularizar sua situação.',
       );
     }
 
-    // 3. 📝 O CRM: Cadastra ou Atualiza automaticamente
     if (!customer) {
-      // Cliente novo? Cria a ficha dele!
       customer = await this.prisma.customer.create({
         data: {
           email: dto.customerEmail,
           name: dto.customerName,
           phone: dto.customerPhone,
-          // cpf: dto.cpf (Se você adicionar CPF no DTO depois, descomente aqui)
         },
       });
     } else {
-      // Cliente antigo? Atualiza o telefone caso tenha mudado
       await this.prisma.customer.update({
         where: { id: customer.id },
         data: {
@@ -92,16 +82,11 @@ export class ReservationsService {
       });
     }
 
-    // =================================================================
-    // 🐛 CORREÇÃO DE DATA E LÓGICA PADRÃO
-    // =================================================================
     const safeDateString = dto.date.includes('T')
       ? dto.date
       : `${dto.date}T12:00:00.000Z`;
-
     const checkDate = new Date(safeDateString);
 
-    // 🔒 VERIFICAÇÃO: DIAS DE FUNCIONAMENTO
     const settings = (nightclub.settings as any) || {};
     const openingDays = settings.openingDays as number[];
 
@@ -150,18 +135,14 @@ export class ReservationsService {
     const paymentDeadline = requiresPayment ? addMinutes(new Date(), 20) : null;
     const validationToken = !requiresPayment ? uuidv4() : null;
 
-    // 4. CRIA A RESERVA VINCULADA AO CLIENTE
     const reservation = await this.prisma.reservation.create({
       data: {
         nightclubId: dto.nightclubId,
         spaceId: dto.spaceId,
-        // Dados snapshot (para agilidade)
         customerName: dto.customerName,
         customerPhone: dto.customerPhone,
         customerEmail: dto.customerEmail,
-        // 🔗 O VÍNCULO SAGRADO
         customerId: customer.id,
-
         date: checkDate,
         notes: dto.notes,
         isBirthday: dto.isBirthday || false,
@@ -210,14 +191,13 @@ export class ReservationsService {
 
     return this.prisma.reservation.findMany({
       where,
-      // 🚨 Mário: Trazemos o customer também para você ver se ele está bloqueado na lista!
       include: { space: true, nightclub: true, customer: true },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   // ===========================================================================
-  // 3. CHECKOUT (Mantido igual)
+  // 3. CHECKOUT
   // ===========================================================================
   async getCheckoutData(id: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -250,7 +230,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 4. GERAR PIX (Mantido igual)
+  // 4. GERAR PIX
   // ===========================================================================
   async generatePix(reservationId: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -348,7 +328,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 5. WEBHOOK (Mantido igual)
+  // 5. WEBHOOK
   // ===========================================================================
   async processWebhook(paymentId: string) {
     const reservation = await this.prisma.reservation.findFirst({
@@ -393,7 +373,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 6. PORTARIA / CHECK-IN (Mantido igual)
+  // 6. PORTARIA / CHECK-IN
   // ===========================================================================
   async checkInByToken(token: string, nightclubId?: string) {
     const where: any = { validationToken: token };
@@ -415,7 +395,7 @@ export class ReservationsService {
   }
 
   // ===========================================================================
-  // 7. CRON JOB (Mantido igual)
+  // 7. CRON JOB (CANCELAMENTO DE PENDENTES)
   // ===========================================================================
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
@@ -448,12 +428,11 @@ export class ReservationsService {
   async remove(id: string) {
     return this.prisma.reservation.delete({ where: { id } });
   }
+
   // ===========================================================================
-  // 9. CHECAR DISPONIBILIDADE (Para pintar o mapa de cinza)
+  // 9. CHECAR DISPONIBILIDADE
   // ===========================================================================
   async getBookedSpaces(nightclubId: string, dateString: string) {
-    // Garante o intervalo do dia inteiro (00:00 até 23:59)
-    // Assumindo que a data vem 'YYYY-MM-DD'
     const startOfDay = new Date(`${dateString}T00:00:00.000Z`);
     const endOfDay = new Date(`${dateString}T23:59:59.999Z`);
 
@@ -461,12 +440,33 @@ export class ReservationsService {
       where: {
         nightclubId,
         date: { gte: startOfDay, lte: endOfDay },
-        status: { not: 'CANCELED' }, // Ignora os cancelados, esses estão livres!
+        status: { not: 'CANCELED' },
       },
-      select: { spaceId: true }, // Só precisamos saber o ID da mesa
+      select: { spaceId: true },
     });
 
-    // Retorna apenas um array simples: ['id-mesa-1', 'id-mesa-2']
     return reservations.map((r) => r.spaceId);
+  }
+
+  // ===========================================================================
+  // 10. RESET DIÁRIO (MEIA-NOITE) 🧹
+  // ===========================================================================
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async handleDailyReset() {
+    console.log('🧹 Iniciando reset diário de ocupação...');
+
+    const yesterday = new Date();
+    yesterday.setHours(0, 0, 0, 0);
+
+    // Muda o status para 'CHECKED_IN' (ou 'COMPLETED') para liberar o mapa no dia seguinte
+    const result = await this.prisma.reservation.updateMany({
+      where: {
+        date: { lt: yesterday },
+        status: 'CONFIRMED',
+      },
+      data: { status: 'CHECKED_IN' },
+    });
+
+    console.log(`✅ Reset concluído: ${result.count} espaços liberados.`);
   }
 }
