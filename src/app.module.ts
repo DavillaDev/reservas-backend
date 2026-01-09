@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { PrismaService } from '.././prisma/prisma.service';
 import { NightclubsModule } from './nightclubs/nightclubs.module';
 import { SpacesModule } from './spaces/spaces.module';
 import { ReservationsModule } from './reservations/reservations.module';
@@ -16,12 +15,15 @@ import { APP_GUARD } from '@nestjs/core';
 // 🛡️ Cloudinary
 import { CloudinaryService } from './cloudinary.service';
 
-// 🛡️ Super Admin
+// 🛡️ Super Admin e Utilitários
 import { SuperController } from './super/super.controller';
 import { SuperService } from './super/super.service';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CustomersModule } from './customers/customers.module';
+
+// 🎫 NOVO MÓDULO VIP
+import { VipModule } from './modules/vip/vip.module'; // 👈 Certifique-se que o caminho está correto
 
 @Module({
   imports: [
@@ -38,19 +40,18 @@ import { CustomersModule } from './customers/customers.module';
     ]),
 
     CustomersModule,
-
     NightclubsModule,
     SpacesModule,
     ReservationsModule,
     AuthModule,
+    VipModule, // 👈 ADICIONADO AQUI PARA RESOLVER O 404
   ],
   controllers: [AppController, UploadController, SuperController],
   providers: [
     AppService,
-    PrismaService,
     SuperService,
     CloudinaryService,
-    // 🛡️ Aplica a proteção do Throttler globalmente em todas as rotas
+    // 🛡️ Aplica a proteção do Throttler globalmente
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
