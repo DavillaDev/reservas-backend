@@ -10,19 +10,15 @@ import { v4 as uuidv4 } from 'uuid';
 export class VipService {
   constructor(private prisma: PrismaService) {}
 
-  // ===========================================================================
-  // 1. GERAR NOVO TOKEN (O DONO CLICA NO BOTÃO)
-  // ===========================================================================
+  // 1. GERAR NOVO TOKEN
   async createToken(nightclubId: string, maxGuests: number, expiresAt: Date) {
-    // Gerador de código curto e amigável (VIP-XXXX)
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removido I, O, 0, 1 para evitar confusão
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let randomPart = '';
     for (let i = 0; i < 4; i++) {
       randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     const code = `VIP-${randomPart}`;
 
-    // Garante que o código é único
     const exists = await this.prisma.vipToken.findUnique({ where: { code } });
     if (exists) return this.createToken(nightclubId, maxGuests, expiresAt);
 
@@ -37,39 +33,30 @@ export class VipService {
     });
   }
 
-  // ===========================================================================
-  // 2. ADICIONAR NOME NA LISTA (O CLIENTE USA O LINK E GERA QR CODE)
-  // ===========================================================================
+  // 2. ADICIONAR NOME NA LISTA (GUEST)
   async addGuest(code: string, guestName: string, guestPhone?: string) {
     const token = await this.prisma.vipToken.findUnique({
-      where: { code },
-      include: { guests: true },
+      where: { code: code.toUpperCase() },
     });
 
     if (!token || !token.isActive) {
-      throw new NotFoundException(
-        'Esta lista VIP não existe ou foi desativada.',
-      );
+      throw new NotFoundException('Lista VIP não encontrada ou inativa.');
     }
 
     if (new Date() > token.expiresAt) {
-      throw new BadRequestException('O prazo para entrar nesta lista expirou.');
+      throw new BadRequestException('Esta lista já expirou.');
     }
 
     if (token.currentCount >= token.maxGuests) {
-      throw new BadRequestException(
-        'Esta lista VIP já atingiu o limite de nomes.',
-      );
+      throw new BadRequestException('Limite da lista atingido.');
     }
 
-    // Criar o convidado com validationToken e atualizar contador em transação
     return this.prisma.$transaction(async (tx) => {
       const guest = await tx.vipGuest.create({
         data: {
           vipTokenId: token.id,
           name: guestName,
           phone: guestPhone,
-          // 🔑 Este token é o valor que estará no QR CODE
           validationToken: uuidv4(),
         },
       });
@@ -83,22 +70,38 @@ export class VipService {
     });
   }
 
-  // ===========================================================================
-  // 3. LISTAR TOKENS DA BALADA (PARA O DASHBOARD DO DONO)
-  // ===========================================================================
+  // 3. LISTAR TOKENS COM CONVIDADOS (PARA LOG E DASHBOARD)
   async getTokensByNightclub(nightclubId: string) {
     return this.prisma.vipToken.findMany({
       where: { nightclubId },
       include: {
+        guests: {
+          select: {
+            id: true,
+            name: true,
+            validationToken: true, // 👈 Importante para o seu teste de log
+            status: true,
+            createdAt: true,
+          },
+        },
         _count: { select: { guests: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  // ===========================================================================
-  // 4. LISTAR CONVIDADOS DE UM TOKEN (PARA A PORTARIA)
-  // ===========================================================================
+  // 4. EXCLUIR LINK VIP E SEUS CONVIDADOS
+  async removeToken(tokenId: string) {
+    // Primeiro removemos os convidados (por causa da constraint do banco)
+    await this.prisma.vipGuest.deleteMany({
+      where: { vipTokenId: tokenId },
+    });
+
+    return this.prisma.vipToken.delete({
+      where: { id: tokenId },
+    });
+  }
+
   async getGuestsByToken(tokenId: string) {
     return this.prisma.vipGuest.findMany({
       where: { vipTokenId: tokenId },

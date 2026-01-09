@@ -4,8 +4,7 @@ import {
   Get,
   Body,
   Param,
-  Query,
-  Patch,
+  Delete, // 👈 Adicionado
   ParseIntPipe,
 } from '@nestjs/common';
 import { VipService } from './vip.service';
@@ -32,7 +31,7 @@ export class VipController {
     );
   }
 
-  // Listar todos os códigos gerados pela balada
+  // Listar todos os códigos gerados pela balada (Incluindo os Guests para o Log)
   @Get('tokens/:nightclubId')
   async getTokens(@Param('nightclubId') nightclubId: string) {
     return this.vipService.getTokensByNightclub(nightclubId);
@@ -42,6 +41,12 @@ export class VipController {
   @Get('guests/:tokenId')
   async getGuests(@Param('tokenId') tokenId: string) {
     return this.vipService.getGuestsByToken(tokenId);
+  }
+
+  // EXCLUIR LINK VIP (E SEUS CONVIDADOS) 🗑️
+  @Delete('token/:id')
+  async deleteToken(@Param('id') id: string) {
+    return this.vipService.removeToken(id);
   }
 
   // ===========================================================================
