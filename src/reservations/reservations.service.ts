@@ -42,27 +42,29 @@ export class ReservationsService {
       throw new NotFoundException('Balada ou espaço não encontrados.');
     }
 
-    if (!dto.customerEmail) {
+    // Validações básicas de cliente
+    if (!dto.customerEmail || !dto.customerName || !dto.customerPhone) {
       throw new BadRequestException(
-        'O e-mail do cliente é obrigatório para a reserva.',
+        'Nome, E-mail e Telefone são obrigatórios.',
       );
     }
-    if (!dto.customerName) {
-      throw new BadRequestException('O nome do cliente é obrigatório.');
-    }
-    if (!dto.customerPhone) {
-      throw new BadRequestException('O telefone do cliente é obrigatório.');
-    }
 
+    // --- CRM & BLACKLIST ---
     let customer = await this.prisma.customer.findUnique({
       where: { email: dto.customerEmail },
     });
 
     if (customer && customer.isBlocked) {
       throw new ForbiddenException(
-        'Sua conta possui restrições administrativas. Por favor, entre em contato com a gerência pelo WhatsApp para regularizar sua situação.',
+        'Sua conta possui restrições administrativas. Entre em contato com a gerência.',
       );
     }
+
+    // 🎂 Lógica de Aniversário: Se o DTO trouxer data, usamos.
+    // Se não trouxer, mas marcar isBirthday, tentamos manter o que já existe no cadastro.
+    const birthdayDate = dto.birthdayDate
+      ? new Date(dto.birthdayDate)
+      : customer?.birthdayDate || null;
 
     if (!customer) {
       customer = await this.prisma.customer.create({
@@ -70,18 +72,23 @@ export class ReservationsService {
           email: dto.customerEmail,
           name: dto.customerName,
           phone: dto.customerPhone,
+          birthdayDate: birthdayDate, // Salva no perfil do cliente pela primeira vez
         },
       });
     } else {
+      // Atualiza os dados do cliente no CRM a cada nova reserva
       await this.prisma.customer.update({
         where: { id: customer.id },
         data: {
           name: dto.customerName,
           phone: dto.customerPhone,
+          // Só atualiza a data de nascimento se ela for enviada agora
+          ...(dto.birthdayDate && { birthdayDate: birthdayDate }),
         },
       });
     }
 
+    // --- VALIDAÇÃO DE DATA E DIAS DE FUNCIONAMENTO ---
     const safeDateString = dto.date.includes('T')
       ? dto.date
       : `${dto.date}T12:00:00.000Z`;
@@ -93,21 +100,11 @@ export class ReservationsService {
     if (openingDays && openingDays.length > 0) {
       const dayOfWeek = checkDate.getDay();
       if (!openingDays.includes(dayOfWeek)) {
-        const dayNames = [
-          'Domingo',
-          'Segunda',
-          'Terça',
-          'Quarta',
-          'Quinta',
-          'Sexta',
-          'Sábado',
-        ];
-        throw new BadRequestException(
-          `A casa não abre neste dia (${dayNames[dayOfWeek]}). Dias disponíveis: ${openingDays.map((d) => dayNames[d]).join(', ')}.`,
-        );
+        throw new BadRequestException(`A casa não abre neste dia.`);
       }
     }
 
+    // --- VALIDAÇÃO DE DISPONIBILIDADE ---
     const startOfDay = new Date(safeDateString);
     startOfDay.setUTCHours(0, 0, 0, 0);
     const endOfDay = new Date(safeDateString);
@@ -122,11 +119,10 @@ export class ReservationsService {
     });
 
     if (existingReservation) {
-      throw new ConflictException(
-        'Este espaço já está reservado para esta data.',
-      );
+      throw new ConflictException('Este espaço já está reservado.');
     }
 
+    // --- LÓGICA DE PAGAMENTO ---
     const price = Number(space.price || 0);
     const paymentActive = settings?.payment_active !== false;
     const requiresPayment = price > 0 && paymentActive;
@@ -135,6 +131,7 @@ export class ReservationsService {
     const paymentDeadline = requiresPayment ? addMinutes(new Date(), 20) : null;
     const validationToken = !requiresPayment ? uuidv4() : null;
 
+    // --- CRIAÇÃO DA RESERVA ---
     const reservation = await this.prisma.reservation.create({
       data: {
         nightclubId: dto.nightclubId,
@@ -145,8 +142,9 @@ export class ReservationsService {
         customerId: customer.id,
         date: checkDate,
         notes: dto.notes,
+        // 🎂 Aqui a mágica acontece: Gravamos o estado de aniversário na reserva
         isBirthday: dto.isBirthday || false,
-        birthdayDate: dto.birthdayDate ? new Date(dto.birthdayDate) : null,
+        birthdayDate: birthdayDate,
         status: initialStatus,
         amount: price,
         paymentDeadline,
@@ -154,6 +152,7 @@ export class ReservationsService {
       },
     });
 
+    // Envio de e-mail para reservas gratuitas/cortesia
     if (!requiresPayment && reservation.customerEmail) {
       const fullRes = await this.prisma.reservation.findUnique({
         where: { id: reservation.id },
@@ -376,22 +375,67 @@ export class ReservationsService {
   // 6. PORTARIA / CHECK-IN
   // ===========================================================================
   async checkInByToken(token: string, nightclubId?: string) {
-    const where: any = { validationToken: token };
-
-    if (nightclubId) where.nightclubId = nightclubId;
-
-    const reservation = await this.prisma.reservation.findFirst({ where });
-
-    if (!reservation)
-      throw new NotFoundException('Token inválido para esta unidade.');
-    if (reservation.status === 'CHECKED_IN')
-      throw new ConflictException('Já foi validado.');
-
-    return this.prisma.reservation.update({
-      where: { id: reservation.id },
-      data: { status: 'CHECKED_IN', checkInAt: new Date() },
+    // 1. Tentar encontrar na tabela de RESERVAS (Mesas/Camarotes)
+    const reservation = await this.prisma.reservation.findFirst({
+      where: {
+        validationToken: token,
+        ...(nightclubId && { nightclubId }),
+      },
       include: { space: true, nightclub: true },
     });
+
+    if (reservation) {
+      if (reservation.status === 'CHECKED_IN') {
+        throw new ConflictException('Esta reserva já foi validada.');
+      }
+
+      return this.prisma.reservation.update({
+        where: { id: reservation.id },
+        data: { status: 'CHECKED_IN', checkInAt: new Date() },
+        include: { space: true, nightclub: true },
+      });
+    }
+
+    // 2. Se não achou na reserva, tentar encontrar na LISTA VIP
+    const vipGuest = await this.prisma.vipGuest.findFirst({
+      where: {
+        validationToken: token,
+        // Filtramos pelo nightclub através do vínculo com o token pai
+        ...(nightclubId && { vipToken: { nightclubId } }),
+      },
+      include: { vipToken: { include: { nightclub: true } } },
+    });
+
+    if (vipGuest) {
+      if (vipGuest.status === 'CHECKED_IN') {
+        throw new ConflictException('Este convidado VIP já entrou.');
+      }
+
+      // Atualiza o convidado VIP para dentro da casa
+      const updatedVip = await this.prisma.vipGuest.update({
+        where: { id: vipGuest.id },
+        data: { status: 'CHECKED_IN', checkInAt: new Date() },
+      });
+
+      // Mapeamos para um formato que o Frontend do Check-in entenda
+      return {
+        id: updatedVip.id,
+        customerName: updatedVip.name,
+        customerEmail: 'Lista VIP',
+        customerPhone: updatedVip.phone,
+        status: updatedVip.status,
+        date: vipGuest.createdAt,
+        amount: 0, // Geralmente lista VIP é free ou paga na porta
+        isVip: true, // Flag para o front saber que é VIP
+        space: { name: `LISTA: ${vipGuest.vipToken.code}` },
+        nightclub: vipGuest.vipToken.nightclub,
+      };
+    }
+
+    // 3. Se não achou em nenhum dos dois
+    throw new NotFoundException(
+      'Token inválido ou não encontrado para esta unidade.',
+    );
   }
 
   // ===========================================================================

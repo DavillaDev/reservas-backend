@@ -42,6 +42,7 @@ model Nightclub {
   mapUrl      String?  
   themeColor  String?  @default("#697cafff")
   whatsapp    String
+  vipTokens    VipToken[]
   
   // SAAS & FINANCEIRO
   appFeePercent Decimal @default(5.0) 
@@ -98,6 +99,7 @@ model Customer {
   email     String   @unique
   phone     String
   cpf       String?  @unique // CPF único para garantir o bloqueio real
+  birthdayDate DateTime?
   
   // 🚨 O Campo da Discórdia: Se true, o cliente não consegue reservar
   isBlocked Boolean  @default(false)
@@ -152,6 +154,49 @@ model Reservation {
 }
 
 // =========================================================
+// 6. LISTA VIP (TOKENS GERADOS PELO DONO)
+// =========================================================
+model VipToken {
+  id           String      @id @default(uuid())
+  nightclubId  String
+  code         String      @unique // Ex: VIP-XJ92 (O "Passaporte" da Lista)
+  
+  maxGuests    Int         @default(50) // Limite de nomes por esse código
+  currentCount Int         @default(0)
+  
+  expiresAt    DateTime    // Quando o código para de aceitar novos nomes
+  isActive     Boolean     @default(true)
+  
+  // Relações
+  guests       VipGuest[]
+  nightclub    Nightclub   @relation(fields: [nightclubId], references: [id])
+  createdAt    DateTime    @default(now())
+
+  @@map("vip_tokens")
+}
+
+// =========================================================
+// 7. CONVIDADOS DA LISTA VIP (OS NOMES NA LISTA)
+// =========================================================
+model VipGuest {
+  id           String      @id @default(uuid())
+  vipTokenId   String
+  
+  name         String
+  phone        String?
+
+  validationToken String?        @unique
+  
+  status       VipGuestStatus @default(PENDING)
+  checkInAt    DateTime?
+  
+  vipToken     VipToken    @relation(fields: [vipTokenId], references: [id])
+  createdAt    DateTime    @default(now())
+
+  @@map("vip_guests")
+}
+
+// =========================================================
 // ENUMS
 // =========================================================
 
@@ -180,4 +225,10 @@ enum ReservationStatus {
   COMPLETED  
   CHECKED_IN
   NO_SHOW     // 🚨 NOVO: Cliente reservou e não apareceu (Gatilho para banimento)
+}
+
+enum VipGuestStatus {
+  PENDING      // Nome na lista, mas não chegou
+  CHECKED_IN   // Já entrou na casa
+  CANCELLED    // Removido da lista
 }
