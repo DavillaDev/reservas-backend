@@ -1,11 +1,9 @@
-// src/super/super.controller.ts (VERSÃO FINAL COM RESET DE SENHA)
-
 import {
   Controller,
   Post,
   Get,
   Body,
-  Param, // 🟢 Importante para ler o ID da URL
+  Param,
   UnauthorizedException,
   Res,
   UseGuards,
@@ -87,7 +85,7 @@ export class SuperController {
   }
 
   // ===========================================================================
-  // 5. RESETAR SENHA (ADMIN FORCE) 🔑 [NOVO]
+  // 5. RESETAR SENHA (ADMIN FORCE) 🔑
   // ===========================================================================
   @UseGuards(MasterAuthGuard)
   @Post('nightclubs/:id/reset-password')
@@ -95,7 +93,17 @@ export class SuperController {
     @Param('id') id: string,
     @Body() body: { password: string },
   ) {
-    // Chama o service passando o ID da balada e a senha crua (que será criptografada lá)
     return this.superService.resetClubPassword(id, body.password);
+  }
+
+  // ===========================================================================
+  // 6. IMPERSONATE (LOGIN DIRETO) 🚀 [NOVO]
+  // ===========================================================================
+  @UseGuards(MasterAuthGuard)
+  @Post('impersonate/:id')
+  async impersonate(@Param('id') id: string) {
+    // Esse método vai retornar um JWT válido como se você fosse o dono da balada
+    const accessToken = await this.superService.generateImpersonateToken(id);
+    return { accessToken };
   }
 }

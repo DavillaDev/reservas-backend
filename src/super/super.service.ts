@@ -1,32 +1,31 @@
-// src/super/super.service.ts (VERSÃO FINAL COMPLETA)
-
 import {
   Injectable,
   ConflictException,
   BadRequestException,
-  NotFoundException, // 🟢 Importante para o Reset de Senha
+  NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { OnboardClubDto } from './dto/onboard-club.dto';
 import { classToPlain } from 'class-transformer';
+import { JwtService } from '@nestjs/jwt'; // 👈 Adicionado
 
 @Injectable()
 export class SuperService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private jwtService: JwtService, // 👈 Injetado para o Super Poder
+  ) {}
 
   // ===========================================================================
   // 1. DASHBOARD INTELIGENTE (Gráficos + Logs + Lista)
   // ===========================================================================
   async getDashboardData() {
-    // Definir intervalo de 30 dias para o gráfico
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    // Executa as 3 consultas pesadas em paralelo
     const [nightclubs, chartReservations, recentLogs] = await Promise.all([
-      // A. Busca Lista de Baladas e Totais Gerais
       this.prisma.nightclub.findMany({
         include: {
           _count: { select: { reservations: true } },
@@ -42,7 +41,6 @@ export class SuperService {
         orderBy: { createdAt: 'desc' },
       }),
 
-      // B. Busca Dados para o Gráfico (Últimos 30 dias)
       this.prisma.reservation.findMany({
         where: {
           createdAt: { gte: thirtyDaysAgo },
@@ -58,7 +56,6 @@ export class SuperService {
         orderBy: { createdAt: 'asc' },
       }),
 
-      // C. Busca Feed de Atividades (Últimas 10 ações)
       this.prisma.reservation.findMany({
         take: 10,
         orderBy: { createdAt: 'desc' },
@@ -68,9 +65,6 @@ export class SuperService {
       }),
     ]);
 
-    // --- PROCESSAMENTO DOS DADOS ---
-
-    // 1. Processar Totais Gerais
     let totalRevenue = 0;
     let totalReservations = 0;
 
@@ -91,7 +85,7 @@ export class SuperService {
         owner: club.users[0]
           ? `${club.users[0].name} (${club.users[0].email})`
           : 'Sem Dono',
-        users: club.users, // Envia lista de users para pegar o email no front
+        users: club.users,
         revenue: clubRevenue,
         reservationsCount: club._count.reservations,
         createdAt: club.createdAt,
@@ -103,10 +97,8 @@ export class SuperService {
       };
     });
 
-    // 2. Processar Gráfico (Agrupar por Dia)
     const chartMap = new Map<string, { revenue: number; profit: number }>();
 
-    // Inicializa os últimos 30 dias com zero
     for (let i = 0; i < 30; i++) {
       const d = new Date();
       d.setDate(d.getDate() - (29 - i));
@@ -117,7 +109,6 @@ export class SuperService {
       chartMap.set(key, { revenue: 0, profit: 0 });
     }
 
-    // Preenche com os dados reais do banco
     chartReservations.forEach((res) => {
       const key = new Date(res.createdAt).toLocaleDateString('pt-BR', {
         day: '2-digit',
@@ -133,8 +124,6 @@ export class SuperService {
         const profit = (amount * fee) / 100;
 
         const current = chartMap.get(key);
-
-        // Verificação de segurança TS
         if (current) {
           chartMap.set(key, {
             revenue: current.revenue + amount,
@@ -149,7 +138,6 @@ export class SuperService {
       ...value,
     }));
 
-    // 3. Processar Logs
     const logs = recentLogs.map((log) => ({
       id: log.id,
       type: 'money',
@@ -229,30 +217,50 @@ export class SuperService {
   }
 
   // ===========================================================================
-  // 3. RESETAR SENHA DO CLIENTE (ADMIN FORCE) 🔑 [NOVO]
+  // 3. RESETAR SENHA DO CLIENTE (ADMIN FORCE) 🔑
   // ===========================================================================
   async resetClubPassword(clubId: string, newPass: string) {
-    // 1. Acha a balada e o dono
     const club = await this.prisma.nightclub.findUnique({
       where: { id: clubId },
-      include: { users: { where: { role: 'OWNER' } } },
+      include: { users: { where: { role: UserRole.OWNER } } },
     });
 
     if (!club || !club.users[0]) {
-      throw new NotFoundException(
-        'Cliente ou Dono não encontrado para esta balada.',
-      );
+      throw new NotFoundException('Cliente ou Dono não encontrado.');
     }
 
-    // 2. Criptografa a nova senha
     const hashedPassword = await bcrypt.hash(newPass, 10);
 
-    // 3. Salva a nova senha no banco
     await this.prisma.user.update({
       where: { id: club.users[0].id },
       data: { password: hashedPassword },
     });
 
     return { message: 'Senha redefinida com sucesso.' };
+  }
+
+  // ===========================================================================
+  // 4. IMPERSONATE (LOGIN DIRETO) 🚀 [SUPER PODER]
+  // ===========================================================================
+  async generateImpersonateToken(nightclubId: string) {
+    // 1. Busca o primeiro usuário administrador (OWNER) dessa balada
+    const user = await this.prisma.user.findFirst({
+      where: { nightclubId, role: UserRole.OWNER },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Nenhum usuário proprietário encontrado.');
+    }
+
+    // 2. Cria o Payload idêntico ao do AuthService original
+    const payload = {
+      email: user.email,
+      sub: user.id,
+      nightclubId: user.nightclubId,
+      role: user.role,
+    };
+
+    // 3. Assina o token com o JwtService
+    return this.jwtService.sign(payload);
   }
 }
