@@ -6,16 +6,38 @@ import * as webpush from 'web-push';
 export class NotificationsService implements OnModuleInit {
   constructor(private prisma: PrismaService) {}
 
-  // Configura as chaves VAPID assim que o módulo inicia
+  // Configura as chaves VAPID com proteção para não quebrar o deploy
   onModuleInit() {
-    webpush.setVapidDetails(
-      process.env.VAPID_SUBJECT,
-      process.env.VAPID_PUBLIC_KEY,
-      process.env.VAPID_PRIVATE_KEY,
-    );
+    const publicKey = process.env.VAPID_PUBLIC_KEY;
+    const privateKey = process.env.VAPID_PRIVATE_KEY;
+    const subject = process.env.VAPID_SUBJECT;
+
+    if (!publicKey || !privateKey || !subject) {
+      console.warn(
+        '⚠️ [PUSH] Notificações desativadas: Faltam chaves VAPID no ambiente.',
+      );
+      return;
+    }
+
+    try {
+      webpush.setVapidDetails(subject, publicKey, privateKey);
+      console.log('✅ [PUSH] Configuração VAPID carregada com sucesso.');
+    } catch (error) {
+      console.error('❌ [PUSH] Erro ao configurar VAPID:', error.message);
+    }
   }
 
-  // A função que salva o token (você já tem, mantivemos aqui)
+  /**
+   * Verifica se o usuário já possui alguma inscrição ativa no banco
+   */
+  async checkSubscription(userId: string): Promise<boolean> {
+    const subscription = await this.prisma.pushSubscription.findFirst({
+      where: { userId },
+    });
+    return !!subscription;
+  }
+
+  // A função que salva ou atualiza o token
   async subscribe(userId: string, subscription: any) {
     const { endpoint, keys } = subscription;
     return this.prisma.pushSubscription.upsert({
