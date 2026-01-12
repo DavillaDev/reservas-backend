@@ -151,8 +151,17 @@ export class ReservationsService {
         paymentDeadline,
         validationToken,
       },
-      // 🔥 Otimização: Já trazemos o space aqui para não precisar de outro findUnique
-      include: { space: true },
+      // ✅ Agora trazemos o Space e o Nightclub (com settings) em uma única consulta
+      include: {
+        space: true,
+        nightclub: {
+          select: {
+            id: true,
+            name: true,
+            settings: true, // Aqui evita o erro de 'undefined settings'
+          },
+        },
+      },
     });
 
     // Envio de e-mail e Push para reservas gratuitas/cortesia (Confirmadas na hora)
@@ -160,7 +169,10 @@ export class ReservationsService {
       // 1. Envia o e-mail
       if (reservation.customerEmail) {
         await this.mailService
-          .sendReservationConfirmation(reservation as any, nightclub.name)
+          .sendReservationConfirmation(
+            reservation as any,
+            reservation.nightclub.name,
+          )
           .catch((err) => console.error('Erro e-mail:', err.message));
       }
 
