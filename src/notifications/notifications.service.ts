@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import * as webpush from 'web-push';
 
@@ -31,6 +31,8 @@ export class NotificationsService implements OnModuleInit {
    * Verifica se o usuário já possui alguma inscrição ativa no banco
    */
   async checkSubscription(userId: string): Promise<boolean> {
+    if (!userId || userId === 'undefined') return false;
+
     const subscription = await this.prisma.pushSubscription.findFirst({
       where: { userId },
     });
@@ -38,36 +40,29 @@ export class NotificationsService implements OnModuleInit {
   }
 
   /**
-   * Salva ou atualiza o token no banco de dados
-   * Adicionado tratamento de String para evitar Erro 500 no Prisma
+   * Salva ou atualiza o token no banco de dados com blindagem total
    */
   async subscribe(userId: string, subscription: any) {
-    console.log('🚀 [DEBUG-PUSH] Iniciando processo de subscrição...');
-    console.log('👤 [DEBUG-PUSH] User ID:', userId);
-    console.log(
-      '📦 [DEBUG-PUSH] Payload recebido do Front:',
-      JSON.stringify(subscription),
-    );
+    // 🛡️ BLINDAGEM: Se o ID vier nulo ou "undefined" (string), barramos aqui
+    if (!userId || userId === 'undefined') {
+      console.error(
+        '❌ [PUSH-SERVICE] Tentativa de subscrição com userId inválido.',
+      );
+      throw new BadRequestException(
+        'ID de usuário inválido para notificações.',
+      );
+    }
 
     try {
       const { endpoint, keys } = subscription;
 
-      if (!endpoint) {
-        console.error('❌ [DEBUG-PUSH] ERRO: Endpoint ausente na subscrição');
-        throw new Error('Endpoint ausente');
+      if (!endpoint || !keys?.auth || !keys?.p256dh) {
+        console.error('❌ [PUSH-SERVICE] Dados da subscrição incompletos.');
+        throw new BadRequestException('Dados da subscrição incompletos.');
       }
 
-      if (!keys || !keys.auth || !keys.p256dh) {
-        console.error('❌ [DEBUG-PUSH] ERRO: Chaves (auth/p256dh) ausentes');
-        console.log('🔑 [DEBUG-PUSH] Chaves recebidas:', keys);
-        throw new Error('Chaves VAPID do navegador ausentes');
-      }
-
-      console.log(
-        '💾 [DEBUG-PUSH] Tentando salvar/atualizar no banco (Prisma)...',
-      );
-
-      const result = await this.prisma.pushSubscription.upsert({
+      // 💾 Operação de Upsert (Cria ou Atualiza)
+      return await this.prisma.pushSubscription.upsert({
         where: { endpoint: endpoint },
         update: {
           userId: userId,
@@ -82,22 +77,14 @@ export class NotificationsService implements OnModuleInit {
           deviceName: 'Navegador Web',
         },
       });
-
-      console.log('✅ [DEBUG-PUSH] Subscrição salva com sucesso no Banco!');
-      return result;
     } catch (error) {
-      console.error('🔥 [DEBUG-PUSH] CRITICAL ERROR NO SUBSCRIBE:');
-      console.error('Message:', error.message);
-      console.error('Stack:', error.stack);
-
-      // Se o erro for do Prisma, ele detalha aqui
-      if (error.code) {
-        console.error('Prisma Error Code:', error.code);
-      }
-
-      throw error; // Repassa para o Controller retornar o 500, mas agora com o log no servidor
+      console.error('🔥 [PUSH-SERVICE] Erro crítico ao salvar no banco:');
+      console.error('Mensagem:', error.message);
+      if (error.code) console.error('Prisma Code:', error.code);
+      throw error;
     }
   }
+
   /**
    * O DISPARO REAL: Envia a notificação para todos os donos/gerentes da balada
    */
@@ -135,7 +122,7 @@ export class NotificationsService implements OnModuleInit {
               })
               .catch(() => {});
           }
-          console.error('Erro ao enviar push:', err);
+          console.error('Erro ao enviar push:', err.message);
         });
       }),
     );
