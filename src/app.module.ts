@@ -22,8 +22,11 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CustomersModule } from './customers/customers.module';
 
-// 🎫 NOVO MÓDULO VIP
-import { VipModule } from './modules/vip/vip.module'; // 👈 Certifique-se que o caminho está correto
+// 🎫 MÓDULO VIP
+import { VipModule } from './modules/vip/vip.module';
+
+// 🔔 NOVO MÓDULO DE NOTIFICAÇÕES
+import { NotificationsModule } from './notifications/notifications.modules'; // 👈 Importação adicionada
 
 @Module({
   imports: [
@@ -44,7 +47,8 @@ import { VipModule } from './modules/vip/vip.module'; // 👈 Certifique-se que 
     SpacesModule,
     ReservationsModule,
     AuthModule,
-    VipModule, // 👈 ADICIONADO AQUI PARA RESOLVER O 404
+    VipModule,
+    NotificationsModule, // 👈 Módulo registrado aqui
   ],
   controllers: [AppController, UploadController, SuperController],
   providers: [

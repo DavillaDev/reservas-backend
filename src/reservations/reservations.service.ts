@@ -16,6 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { decrypt } from '../common/utils/encryption.util';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class ReservationsService {
@@ -23,6 +24,7 @@ export class ReservationsService {
     private prisma: PrismaService,
     private mailService: MailService,
     private configService: ConfigService,
+    private notificationsService: NotificationsService,
   ) {}
 
   // ===========================================================================
@@ -158,11 +160,20 @@ export class ReservationsService {
         where: { id: reservation.id },
         include: { space: true, nightclub: true },
       });
+
       if (fullRes) {
+        // 1. Envia o e-mail
         await this.mailService.sendReservationConfirmation(
           fullRes as any,
           nightclub.name,
         );
+
+        // 2. 🔔 DISPARA A NOTIFICAÇÃO (Dentro do if para ter acesso ao fullRes)
+        await this.notificationsService.notifyNewReservation(dto.nightclubId, {
+          id: fullRes.id,
+          customerName: fullRes.customerName,
+          spaceName: fullRes.space.name,
+        });
       }
     }
 
@@ -365,12 +376,23 @@ export class ReservationsService {
             .sendReservationConfirmation(updated as any, updated.nightclub.name)
             .catch((err) => console.error('Erro e-mail:', err.message));
         }
+
+        // 🔔 DISPARO DA NOTIFICAÇÃO PUSH
+        // Isso vai fazer o celular do dono/gerente apitar na hora!
+        await this.notificationsService
+          .notifyNewReservation(updated.nightclubId, {
+            id: updated.id,
+            customerName: updated.customerName,
+            spaceName: updated.space.name,
+          })
+          .catch((err) =>
+            console.error('Erro ao enviar notificação push:', err.message),
+          );
       }
     } catch (error: any) {
       console.error('Erro Webhook:', error.message);
     }
   }
-
   // ===========================================================================
   // 6. PORTARIA / CHECK-IN
   // ===========================================================================
