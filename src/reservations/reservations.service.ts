@@ -144,7 +144,6 @@ export class ReservationsService {
         customerId: customer.id,
         date: checkDate,
         notes: dto.notes,
-        // 🎂 Aqui a mágica acontece: Gravamos o estado de aniversário na reserva
         isBirthday: dto.isBirthday || false,
         birthdayDate: birthdayDate,
         status: initialStatus,
@@ -152,30 +151,34 @@ export class ReservationsService {
         paymentDeadline,
         validationToken,
       },
+      // 🔥 Otimização: Já trazemos o space aqui para não precisar de outro findUnique
+      include: { space: true },
     });
 
-    // Envio de e-mail para reservas gratuitas/cortesia
-    if (!requiresPayment && reservation.customerEmail) {
-      const fullRes = await this.prisma.reservation.findUnique({
-        where: { id: reservation.id },
-        include: { space: true, nightclub: true },
-      });
-
-      if (fullRes) {
-        // 1. Envia o e-mail
-        await this.mailService.sendReservationConfirmation(
-          fullRes as any,
-          nightclub.name,
-        );
-
-        // 2. 🔔 DISPARA A NOTIFICAÇÃO (Dentro do if para ter acesso ao fullRes)
-        await this.notificationsService.notifyNewReservation(dto.nightclubId, {
-          id: fullRes.id,
-          customerName: fullRes.customerName,
-          spaceName: fullRes.space.name,
-        });
+    // Envio de e-mail e Push para reservas gratuitas/cortesia (Confirmadas na hora)
+    if (!requiresPayment) {
+      // 1. Envia o e-mail
+      if (reservation.customerEmail) {
+        await this.mailService
+          .sendReservationConfirmation(reservation as any, nightclub.name)
+          .catch((err) => console.error('Erro e-mail:', err.message));
       }
+
+      // 2. 🔔 DISPARA A NOTIFICAÇÃO PUSH
+      // Agora usamos o include do create para pegar o space.name com segurança
+      await this.notificationsService
+        .notifyNewReservation(dto.nightclubId, {
+          id: reservation.id,
+          customerName: reservation.customerName,
+          spaceName: (reservation as any).space.name,
+        })
+        .catch((err) => console.error('Erro Push:', err.message));
     }
+
+    return {
+      ...reservation,
+      action: requiresPayment ? 'REDIRECT_CHECKOUT' : 'SHOW_CONFIRMATION',
+    };
 
     return {
       ...reservation,
