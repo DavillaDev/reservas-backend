@@ -42,29 +42,62 @@ export class NotificationsService implements OnModuleInit {
    * Adicionado tratamento de String para evitar Erro 500 no Prisma
    */
   async subscribe(userId: string, subscription: any) {
-    const { endpoint, keys } = subscription;
+    console.log('🚀 [DEBUG-PUSH] Iniciando processo de subscrição...');
+    console.log('👤 [DEBUG-PUSH] User ID:', userId);
+    console.log(
+      '📦 [DEBUG-PUSH] Payload recebido do Front:',
+      JSON.stringify(subscription),
+    );
 
-    // Garantimos que os valores sejam Strings puras para o Postgres
-    const auth = String(keys.auth);
-    const p256dh = String(keys.p256dh);
+    try {
+      const { endpoint, keys } = subscription;
 
-    return this.prisma.pushSubscription.upsert({
-      where: { endpoint },
-      update: {
-        userId,
-        auth: auth,
-        p256dh: p256dh,
-      },
-      create: {
-        userId,
-        endpoint,
-        auth: auth,
-        p256dh: p256dh,
-        deviceName: 'Navegador Web',
-      },
-    });
+      if (!endpoint) {
+        console.error('❌ [DEBUG-PUSH] ERRO: Endpoint ausente na subscrição');
+        throw new Error('Endpoint ausente');
+      }
+
+      if (!keys || !keys.auth || !keys.p256dh) {
+        console.error('❌ [DEBUG-PUSH] ERRO: Chaves (auth/p256dh) ausentes');
+        console.log('🔑 [DEBUG-PUSH] Chaves recebidas:', keys);
+        throw new Error('Chaves VAPID do navegador ausentes');
+      }
+
+      console.log(
+        '💾 [DEBUG-PUSH] Tentando salvar/atualizar no banco (Prisma)...',
+      );
+
+      const result = await this.prisma.pushSubscription.upsert({
+        where: { endpoint: endpoint },
+        update: {
+          userId: userId,
+          auth: String(keys.auth),
+          p256dh: String(keys.p256dh),
+        },
+        create: {
+          userId: userId,
+          endpoint: endpoint,
+          auth: String(keys.auth),
+          p256dh: String(keys.p256dh),
+          deviceName: 'Navegador Web',
+        },
+      });
+
+      console.log('✅ [DEBUG-PUSH] Subscrição salva com sucesso no Banco!');
+      return result;
+    } catch (error) {
+      console.error('🔥 [DEBUG-PUSH] CRITICAL ERROR NO SUBSCRIBE:');
+      console.error('Message:', error.message);
+      console.error('Stack:', error.stack);
+
+      // Se o erro for do Prisma, ele detalha aqui
+      if (error.code) {
+        console.error('Prisma Error Code:', error.code);
+      }
+
+      throw error; // Repassa para o Controller retornar o 500, mas agora com o log no servidor
+    }
   }
-
   /**
    * O DISPARO REAL: Envia a notificação para todos os donos/gerentes da balada
    */
