@@ -37,17 +37,29 @@ export class NotificationsService implements OnModuleInit {
     return !!subscription;
   }
 
-  // A função que salva ou atualiza o token
+  /**
+   * Salva ou atualiza o token no banco de dados
+   * Adicionado tratamento de String para evitar Erro 500 no Prisma
+   */
   async subscribe(userId: string, subscription: any) {
     const { endpoint, keys } = subscription;
+
+    // Garantimos que os valores sejam Strings puras para o Postgres
+    const auth = String(keys.auth);
+    const p256dh = String(keys.p256dh);
+
     return this.prisma.pushSubscription.upsert({
       where: { endpoint },
-      update: { userId, auth: keys.auth, p256dh: keys.p256dh },
+      update: {
+        userId,
+        auth: auth,
+        p256dh: p256dh,
+      },
       create: {
         userId,
         endpoint,
-        auth: keys.auth,
-        p256dh: keys.p256dh,
+        auth: auth,
+        p256dh: p256dh,
         deviceName: 'Navegador Web',
       },
     });
@@ -84,9 +96,11 @@ export class NotificationsService implements OnModuleInit {
         return webpush.sendNotification(pushConfig, payload).catch((err) => {
           if (err.statusCode === 410 || err.statusCode === 404) {
             // Token expirado ou inválido, deletamos do banco para manter limpo
-            return this.prisma.pushSubscription.delete({
-              where: { id: sub.id },
-            });
+            return this.prisma.pushSubscription
+              .delete({
+                where: { id: sub.id },
+              })
+              .catch(() => {});
           }
           console.error('Erro ao enviar push:', err);
         });
