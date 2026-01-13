@@ -388,75 +388,79 @@ export class ReservationsService {
   // 5. WEBHOOK
   // ===========================================================================
   async processWebhook(paymentId: string) {
-    // 1. Busca a reserva permitindo que ela esteja PENDING ou CANCELED
-    // Isso evita que o Cron Job impeça a confirmação de um pagamento legítimo
+    // 1. Busca a reserva (PENDENTE ou CANCELADA)
     const reservation = await this.prisma.reservation.findFirst({
       where: {
         paymentId: paymentId.toString(),
-        status: { in: ['PENDING', 'CANCELED'] }, // 🛡️ 'Ressuscita' canceladas caso o banco confirme o PIX
+        status: { in: ['PENDING', 'CANCELED'] },
       },
       include: { nightclub: true },
     });
 
-    // Se não achou (ou se já estiver CONFIRMED), encerra sem erro.
     if (!reservation) {
       console.log(
-        `[WEBHOOK] Pagamento ${paymentId} ignorado (Já confirmado ou não encontrado).`,
+        `[WEBHOOK] Pagamento ${paymentId} ignorado ou já processado.`,
       );
       return;
     }
 
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-    const rawToken = settings.mpAccessToken;
+    const rawToken = reservation.nightclub.mpAccessToken; // Usando campo direto
 
-    // Decriptografia e escolha do token ativo
     const activeAccessToken =
       rawToken && rawToken.includes(':')
         ? decrypt(rawToken)
         : rawToken || platformToken;
 
-    // 🔑 CORREÇÃO: Usando a variável correta 'activeAccessToken'
     const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
     const payment = new Payment(client);
 
     try {
       const paymentData = await payment.get({ id: paymentId });
 
-      if (paymentData.status === 'approved') {
-        const validationToken = uuidv4();
-
-        // 🛡️ A ORDEM IMPORTA: Atualiza o banco primeiro.
-        const updated = await this.prisma.reservation.update({
-          where: { id: reservation.id },
-          data: {
-            status: 'CONFIRMED',
-            validationToken,
-          },
-          include: { space: true, nightclub: true },
-        });
-
-        console.log(
-          `✅ [WEBHOOK] Reserva ${updated.id} confirmada/ressuscitada no banco.`,
-        );
-
-        // 2. Notificações externas
-        if (updated.customerEmail) {
-          await this.mailService
-            .sendReservationConfirmation(updated as any, updated.nightclub.name)
-            .catch((err) => console.error('Erro e-mail:', err.message));
-        }
-
-        await this.notificationsService
-          .notifyNewReservation(updated.nightclubId, {
-            id: updated.id,
-            customerName: updated.customerName,
-            spaceName: updated.space.name,
-          })
-          .catch((err) => console.error('Erro Push:', err.message));
+      // 🛡️ TRAVA: Só processamos se o status for aprovado.
+      // Se for 'pending', 'in_process', etc, a gente encerra silenciosamente.
+      if (paymentData.status !== 'approved') {
+        return;
       }
+
+      const validationToken = uuidv4();
+
+      const updated = await this.prisma.reservation.update({
+        where: { id: reservation.id },
+        data: {
+          status: 'CONFIRMED',
+          validationToken,
+        },
+        include: { space: true, nightclub: true },
+      });
+
+      console.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada com sucesso.`);
+
+      // Notificações
+      if (updated.customerEmail) {
+        await this.mailService
+          .sendReservationConfirmation(updated as any, updated.nightclub.name)
+          .catch((err) => console.error('Erro e-mail:', err.message));
+      }
+
+      await this.notificationsService
+        .notifyNewReservation(updated.nightclubId, {
+          id: updated.id,
+          customerName: updated.customerName,
+          spaceName: updated.space.name,
+        })
+        .catch((err) => console.error('Erro Push:', err.message));
     } catch (error: any) {
-      console.error('❌ Erro Crítico Webhook:', error.message);
+      // Se o erro for 404 (Payment not found), a gente loga como aviso e não como erro crítico
+      if (error.status === 404 || error.message?.includes('not found')) {
+        console.warn(
+          `[WEBHOOK_WARN] Pagamento ${paymentId} ainda não indexado no MP. Aguardando próxima notificação...`,
+        );
+      } else {
+        console.error('❌ Erro Crítico Webhook:', error.message);
+      }
     }
   }
   // ===========================================================================
