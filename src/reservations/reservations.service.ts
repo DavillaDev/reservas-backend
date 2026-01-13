@@ -191,11 +191,6 @@ export class ReservationsService {
       ...reservation,
       action: requiresPayment ? 'REDIRECT_CHECKOUT' : 'SHOW_CONFIRMATION',
     };
-
-    return {
-      ...reservation,
-      action: requiresPayment ? 'REDIRECT_CHECKOUT' : 'SHOW_CONFIRMATION',
-    };
   }
 
   // ===========================================================================
