@@ -256,7 +256,7 @@ export class ReservationsService {
     const reservation = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
       include: {
-        nightclub: true, // 👈 Aqui já trazemos o appFeePercent
+        nightclub: true,
         space: true,
       },
     });
@@ -265,15 +265,13 @@ export class ReservationsService {
       throw new NotFoundException('Reserva não encontrada.');
     }
 
-    // 💰 BUSCA A TAXA DIRETO DO CAMPO appFeePercent (Default 5.0 no Prisma)
-    // Como é Decimal, convertemos para Number e dividimos por 100
+    // 💰 Busca a taxa do campo appFeePercent (Ex: 5.0)
     const percentage = reservation.nightclub.appFeePercent
       ? Number(reservation.nightclub.appFeePercent) / 100
       : 0.05;
 
-    const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-    const rawToken = reservation.nightclub.mpAccessToken; // 👈 Usando campo direto da model
+    const rawToken = reservation.nightclub.mpAccessToken;
 
     const accessTokenParaUsar =
       rawToken && rawToken.includes(':')
@@ -284,39 +282,87 @@ export class ReservationsService {
     const payment = new Payment(client);
 
     try {
-      // ... (lógica de recuperação de pagamento existente)
+      // 1. Tentar recuperar pagamento existente e válido
+      if (
+        reservation.paymentId &&
+        reservation.paymentDeadline &&
+        new Date(reservation.paymentDeadline) > new Date()
+      ) {
+        try {
+          const existing = await payment.get({ id: reservation.paymentId });
+          if (existing.status === 'pending') {
+            return {
+              qrCodeBase64:
+                existing.point_of_interaction?.transaction_data?.qr_code_base64,
+              pixCode: existing.point_of_interaction?.transaction_data?.qr_code,
+              paymentId: existing.id,
+              amount: reservation.amount,
+              expiresAt: reservation.paymentDeadline,
+            };
+          }
+        } catch (e) {
+          console.warn(
+            `[MP_RECOVERY_WARN] Falha ao recuperar, gerando novo...`,
+          );
+        }
+      }
 
+      const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
 
-      // 🛡️ VALIDAÇÃO DE EMAIL
+      // 🛡️ Validação de E-mail para o Mercado Pago
       const validEmail = reservation.customerEmail?.includes('@')
         ? reservation.customerEmail.trim().toLowerCase()
         : `cliente.${reservation.id.substring(0, 5)}@reservasclub.com.br`;
 
-      // 💰 CÁLCULO DINÂMICO DA TAXA (Ex: 10 / 100 = 0.1)
+      // 💰 Cálculo da Taxa
       const myFee = Number((amount * percentage).toFixed(2));
 
+      // 2. Montar o corpo do pagamento
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
         payment_method_id: 'pix',
-        application_fee: myFee, // 👈 Agora 100% vinculado ao seu Dashboard Master
         payer: {
           email: validEmail,
           first_name: reservation.customerName.split(' ')[0] || 'Cliente',
         },
         notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
-        date_of_expiration: addMinutes(new Date(), 20).toISOString(),
+        date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
       };
 
-      const response = await payment.create({ body: paymentBody });
+      // Só anexa a taxa se o valor for superior a R$ 2,00 e houver token de terceiro
+      if (rawToken && amount > 2) {
+        paymentBody.application_fee = myFee;
+      }
 
+      let response;
+      try {
+        // 🚀 TENTATIVA 1: Com Taxa
+        response = await payment.create({ body: paymentBody });
+      } catch (mpError: any) {
+        const errorData = mpError.response?.data || {};
+        const errorMsg = errorData.message || mpError.message || '';
+
+        // 🛡️ FALLBACK: Se o erro for sobre a application_fee, tenta sem ela
+        if (errorMsg.includes('application_fee')) {
+          console.warn(
+            `[MP_FEE_FALLBACK] Removendo taxa para evitar erro 400. Motivo: ${errorMsg}`,
+          );
+          delete paymentBody.application_fee;
+          response = await payment.create({ body: paymentBody });
+        } else {
+          throw mpError; // Outros erros (token, e-mail) disparam o catch principal
+        }
+      }
+
+      // 3. Atualizar a reserva com o novo ID de pagamento
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
           paymentId: response.id?.toString(),
-          paymentDeadline: addMinutes(new Date(), 20),
+          paymentDeadline: expiresAtDate,
           status: 'PENDING',
         },
       });
@@ -327,14 +373,14 @@ export class ReservationsService {
         pixCode: response.point_of_interaction?.transaction_data?.qr_code,
         paymentId: response.id,
         amount,
-        expiresAt: addMinutes(new Date(), 20),
+        expiresAt: expiresAtDate,
       };
     } catch (error: any) {
       console.error(
         '❌ ERRO MERCADO PAGO:',
         error.response?.data || error.message,
       );
-      throw new BadRequestException('Erro ao processar pagamento.');
+      throw new BadRequestException('Erro ao processar pagamento no provedor.');
     }
   }
 
