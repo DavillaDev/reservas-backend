@@ -309,19 +309,25 @@ export class ReservationsService {
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
 
-      // 🛡️ TRAVA DE SEGURANÇA PARA O E-MAIL (Resolve o erro do Mercado Pago)
-      // Se o e-mail não tiver '@' ou for muito curto, usamos um fallback para não travar o PIX
+      // 🛡️ VALIDAÇÃO DE EMAIL
       const validEmail =
         reservation.customerEmail && reservation.customerEmail.includes('@')
           ? reservation.customerEmail.trim().toLowerCase()
           : `cliente.${reservation.id.substring(0, 5)}@reservasclub.com.br`;
 
+      // 💰 CÁLCULO DA TAXA (5%)
+      // R$ 10,00 * 0.05 = R$ 0,50
+      const myFee = Number((amount * 0.05).toFixed(2));
+
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
         payment_method_id: 'pix',
+        // 🔑 AQUI ESTÁ O SEU DINHEIRO:
+        // Se estiver usando a conta do dono, essa taxa vai para a sua conta MP
+        application_fee: myFee,
         payer: {
-          email: validEmail, // 👈 Agora garantido
+          email: validEmail,
           first_name: reservation.customerName.split(' ')[0] || 'Cliente',
         },
         notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
@@ -353,9 +359,7 @@ export class ReservationsService {
         '❌ ERRO MERCADO PAGO:',
         error.response?.data || error.message,
       );
-      throw new BadRequestException(
-        'Erro ao processar pagamento. Tente novamente mais tarde.',
-      );
+      throw new BadRequestException('Erro ao processar pagamento.');
     }
   }
 
@@ -363,19 +367,20 @@ export class ReservationsService {
   // 5. WEBHOOK
   // ===========================================================================
   async processWebhook(paymentId: string) {
-    // 1. Busca a reserva garantindo que ela ainda esteja PENDING
+    // 1. Busca a reserva permitindo que ela esteja PENDING ou CANCELED
+    // Isso evita que o Cron Job impeça a confirmação de um pagamento legítimo
     const reservation = await this.prisma.reservation.findFirst({
       where: {
         paymentId: paymentId.toString(),
-        status: 'PENDING', // 🛡️ Trava: Se já estiver CONFIRMED, ele nem continua
+        status: { in: ['PENDING', 'CANCELED'] }, // 🛡️ 'Ressuscita' canceladas caso o banco confirme o PIX
       },
       include: { nightclub: true },
     });
 
-    // Se não achou ou já foi processada por outra requisição simultânea, encerra.
+    // Se não achou (ou se já estiver CONFIRMED), encerra sem erro.
     if (!reservation) {
       console.log(
-        `[WEBHOOK] Pagamento ${paymentId} ignorado (Já processado ou inexistente).`,
+        `[WEBHOOK] Pagamento ${paymentId} ignorado (Já confirmado ou não encontrado).`,
       );
       return;
     }
@@ -383,11 +388,14 @@ export class ReservationsService {
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
     const rawToken = settings.mpAccessToken;
+
+    // Decriptografia e escolha do token ativo
     const activeAccessToken =
       rawToken && rawToken.includes(':')
         ? decrypt(rawToken)
         : rawToken || platformToken;
 
+    // 🔑 CORREÇÃO: Usando a variável correta 'activeAccessToken'
     const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
     const payment = new Payment(client);
 
@@ -397,8 +405,7 @@ export class ReservationsService {
       if (paymentData.status === 'approved') {
         const validationToken = uuidv4();
 
-        // 🛡️ A ORDEM IMPORTA: Primeiro atualizamos o Banco.
-        // Se o banco falhar, o código cai no catch e NÃO manda e-mail falso.
+        // 🛡️ A ORDEM IMPORTA: Atualiza o banco primeiro.
         const updated = await this.prisma.reservation.update({
           where: { id: reservation.id },
           data: {
@@ -408,9 +415,11 @@ export class ReservationsService {
           include: { space: true, nightclub: true },
         });
 
-        console.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada no banco.`);
+        console.log(
+          `✅ [WEBHOOK] Reserva ${updated.id} confirmada/ressuscitada no banco.`,
+        );
 
-        // 2. Só agora que o banco confirmou, enviamos as notificações externas
+        // 2. Notificações externas
         if (updated.customerEmail) {
           await this.mailService
             .sendReservationConfirmation(updated as any, updated.nightclub.name)
@@ -427,7 +436,6 @@ export class ReservationsService {
       }
     } catch (error: any) {
       console.error('❌ Erro Crítico Webhook:', error.message);
-      // Aqui você poderia implementar um log de erro em tabela para auditoria
     }
   }
   // ===========================================================================
