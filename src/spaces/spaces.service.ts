@@ -1,5 +1,3 @@
-// api/src/spaces/spaces.service.ts
-
 import {
   Injectable,
   InternalServerErrorException,
@@ -8,7 +6,6 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateSpaceDto } from './dto/create-space.dto';
 import { UpdateSpaceDto } from './dto/update-space.dto';
-// 🔑 IMPORTANTE: Importar o Enum gerado pelo Prisma
 import { SpaceType } from '@prisma/client';
 
 @Injectable()
@@ -31,7 +28,6 @@ export class SpacesService {
       return await this.prisma.space.create({
         data: {
           name: String(createSpaceDto.name),
-          // 🔑 SOLUÇÃO: Fazemos o cast para 'SpaceType' para satisfazer o TypeScript
           type: createSpaceDto.type as SpaceType,
           capacity: Number(createSpaceDto.capacity) || 1,
           price: Number(createSpaceDto.price) || 0,
@@ -46,14 +42,15 @@ export class SpacesService {
     }
   }
 
-  // ... (mantenha os outros métodos iguais)
-
   async findAll() {
     return this.prisma.space.findMany();
   }
 
   async findByNightclub(nightclubId: string) {
-    return this.prisma.space.findMany({ where: { nightclubId } });
+    // 🛡️ Removido o orderBy para evitar erro de propriedade inexistente (createdAt)
+    return this.prisma.space.findMany({
+      where: { nightclubId },
+    });
   }
 
   async findOne(id: string) {
@@ -65,7 +62,6 @@ export class SpacesService {
       where: { id },
       data: {
         ...updateSpaceDto,
-        // Caso o 'type' venha no update, também precisa do cast
         type: updateSpaceDto.type
           ? (updateSpaceDto.type as SpaceType)
           : undefined,
@@ -73,7 +69,27 @@ export class SpacesService {
     });
   }
 
+  /**
+   * 🛡️ REMOÇÃO FORÇADA (CASCADE MANUAL)
+   * Deleta todas as reservas vinculadas antes de apagar o espaço.
+   */
   async remove(id: string) {
-    return this.prisma.space.delete({ where: { id } });
+    try {
+      // 1. Limpa as reservas para evitar erro de Foreign Key (P2003)
+      // Fazemos isso primeiro para que o dono consiga deletar o espaço "na marra"
+      await this.prisma.reservation.deleteMany({
+        where: { spaceId: id },
+      });
+
+      // 2. Apaga o espaço definitivamente
+      return await this.prisma.space.delete({
+        where: { id },
+      });
+    } catch (error: any) {
+      console.error('ERRO AO DELETAR ESPAÇO:', error.message);
+      throw new InternalServerErrorException(
+        'Erro ao excluir o espaço e suas dependências.',
+      );
+    }
   }
 }

@@ -309,13 +309,20 @@ export class ReservationsService {
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
 
+      // 🛡️ TRAVA DE SEGURANÇA PARA O E-MAIL (Resolve o erro do Mercado Pago)
+      // Se o e-mail não tiver '@' ou for muito curto, usamos um fallback para não travar o PIX
+      const validEmail =
+        reservation.customerEmail && reservation.customerEmail.includes('@')
+          ? reservation.customerEmail.trim().toLowerCase()
+          : `cliente.${reservation.id.substring(0, 5)}@reservasclub.com.br`;
+
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
         payment_method_id: 'pix',
         payer: {
-          email: reservation.customerEmail || 'cliente@email.com',
-          first_name: reservation.customerName.split(' ')[0],
+          email: validEmail, // 👈 Agora garantido
+          first_name: reservation.customerName.split(' ')[0] || 'Cliente',
         },
         notification_url: `https://reservas-backend-fa4b.onrender.com/reservations/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
