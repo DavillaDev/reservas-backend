@@ -363,16 +363,25 @@ export class ReservationsService {
   // 5. WEBHOOK
   // ===========================================================================
   async processWebhook(paymentId: string) {
+    // 1. Busca a reserva garantindo que ela ainda esteja PENDING
     const reservation = await this.prisma.reservation.findFirst({
-      where: { paymentId: paymentId.toString() },
+      where: {
+        paymentId: paymentId.toString(),
+        status: 'PENDING', // 🛡️ Trava: Se já estiver CONFIRMED, ele nem continua
+      },
       include: { nightclub: true },
     });
 
-    if (!reservation || reservation.status === 'CONFIRMED') return;
+    // Se não achou ou já foi processada por outra requisição simultânea, encerra.
+    if (!reservation) {
+      console.log(
+        `[WEBHOOK] Pagamento ${paymentId} ignorado (Já processado ou inexistente).`,
+      );
+      return;
+    }
 
     const settings = (reservation.nightclub.settings as any) || {};
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-
     const rawToken = settings.mpAccessToken;
     const activeAccessToken =
       rawToken && rawToken.includes(':')
@@ -387,32 +396,38 @@ export class ReservationsService {
 
       if (paymentData.status === 'approved') {
         const validationToken = uuidv4();
+
+        // 🛡️ A ORDEM IMPORTA: Primeiro atualizamos o Banco.
+        // Se o banco falhar, o código cai no catch e NÃO manda e-mail falso.
         const updated = await this.prisma.reservation.update({
           where: { id: reservation.id },
-          data: { status: 'CONFIRMED', validationToken },
+          data: {
+            status: 'CONFIRMED',
+            validationToken,
+          },
           include: { space: true, nightclub: true },
         });
 
+        console.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada no banco.`);
+
+        // 2. Só agora que o banco confirmou, enviamos as notificações externas
         if (updated.customerEmail) {
           await this.mailService
             .sendReservationConfirmation(updated as any, updated.nightclub.name)
             .catch((err) => console.error('Erro e-mail:', err.message));
         }
 
-        // 🔔 DISPARO DA NOTIFICAÇÃO PUSH
-        // Isso vai fazer o celular do dono/gerente apitar na hora!
         await this.notificationsService
           .notifyNewReservation(updated.nightclubId, {
             id: updated.id,
             customerName: updated.customerName,
             spaceName: updated.space.name,
           })
-          .catch((err) =>
-            console.error('Erro ao enviar notificação push:', err.message),
-          );
+          .catch((err) => console.error('Erro Push:', err.message));
       }
     } catch (error: any) {
-      console.error('Erro Webhook:', error.message);
+      console.error('❌ Erro Crítico Webhook:', error.message);
+      // Aqui você poderia implementar um log de erro em tabela para auditoria
     }
   }
   // ===========================================================================
