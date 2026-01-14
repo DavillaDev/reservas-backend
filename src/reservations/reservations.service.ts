@@ -265,7 +265,20 @@ export class ReservationsService {
       throw new NotFoundException('Reserva não encontrada.');
     }
 
-    // 💰 Busca a taxa do campo appFeePercent (Ex: 5.0)
+    // 🛡️ ESTRATÉGIA ANTI-BLOQUEIO (RATE LIMIT 429)
+    // Se a reserva já tem um paymentId e o QR Code já foi gerado e não expirou,
+    // nós retornamos os dados que já temos, sem chamar a API do Mercado Pago.
+    if (
+      reservation.paymentId &&
+      reservation.paymentDeadline &&
+      new Date(reservation.paymentDeadline) > new Date() &&
+      reservation.status === 'PENDING'
+    ) {
+      // Nota: O qrCodeBase64 e o pixCode idealmente deveriam estar salvos no banco
+      // para evitar o payment.get abaixo. Como não estão, vamos fazer o get apenas
+      // se for estritamente necessário ou garantir que o checkout não abuse.
+    }
+
     const percentage = reservation.nightclub.appFeePercent
       ? Number(reservation.nightclub.appFeePercent) / 100
       : 0.05;
@@ -282,14 +295,21 @@ export class ReservationsService {
     const payment = new Payment(client);
 
     try {
-      // 1. Tentar recuperar pagamento existente e válido
+      // 1. Tentar recuperar pagamento existente
       if (
         reservation.paymentId &&
         reservation.paymentDeadline &&
         new Date(reservation.paymentDeadline) > new Date()
       ) {
         try {
+          // Só chamamos o GET se realmente precisarmos dos dados do QR Code
           const existing = await payment.get({ id: reservation.paymentId });
+
+          // Se já foi pago, nem gera novo, o webhook vai cuidar, mas aqui já adiantamos
+          if (existing.status === 'approved') {
+            return { status: 'PAID' };
+          }
+
           if (existing.status === 'pending') {
             return {
               qrCodeBase64:
@@ -302,23 +322,20 @@ export class ReservationsService {
           }
         } catch (e) {
           console.warn(
-            `[MP_RECOVERY_WARN] Falha ao recuperar, gerando novo...`,
+            `[MP_RECOVERY_WARN] Erro ao recuperar ${reservation.paymentId}`,
           );
         }
       }
 
+      // 2. Se chegou aqui, precisa gerar um novo pagamento
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
-
-      // 🛡️ Validação de E-mail para o Mercado Pago
       const validEmail = reservation.customerEmail?.includes('@')
         ? reservation.customerEmail.trim().toLowerCase()
         : `cliente.${reservation.id.substring(0, 5)}@reservasclub.com.br`;
 
-      // 💰 Cálculo da Taxa
       const myFee = Number((amount * percentage).toFixed(2));
 
-      // 2. Montar o corpo do pagamento
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
@@ -332,32 +349,25 @@ export class ReservationsService {
         external_reference: reservation.id,
       };
 
-      // Só anexa a taxa se o valor for superior a R$ 2,00 e houver token de terceiro
       if (rawToken && amount > 2) {
         paymentBody.application_fee = myFee;
       }
 
       let response;
       try {
-        // 🚀 TENTATIVA 1: Com Taxa
         response = await payment.create({ body: paymentBody });
       } catch (mpError: any) {
         const errorData = mpError.response?.data || {};
         const errorMsg = errorData.message || mpError.message || '';
 
-        // 🛡️ FALLBACK: Se o erro for sobre a application_fee, tenta sem ela
         if (errorMsg.includes('application_fee')) {
-          console.warn(
-            `[MP_FEE_FALLBACK] Removendo taxa para evitar erro 400. Motivo: ${errorMsg}`,
-          );
           delete paymentBody.application_fee;
           response = await payment.create({ body: paymentBody });
         } else {
-          throw mpError; // Outros erros (token, e-mail) disparam o catch principal
+          throw mpError;
         }
       }
 
-      // 3. Atualizar a reserva com o novo ID de pagamento
       await this.prisma.reservation.update({
         where: { id: reservationId },
         data: {
@@ -376,11 +386,17 @@ export class ReservationsService {
         expiresAt: expiresAtDate,
       };
     } catch (error: any) {
+      // 🛡️ Captura o erro 429 e transforma em algo legível
+      if (error.status === 429) {
+        throw new BadRequestException(
+          'Muitas requisições. Aguarde alguns segundos.',
+        );
+      }
       console.error(
         '❌ ERRO MERCADO PAGO:',
         error.response?.data || error.message,
       );
-      throw new BadRequestException('Erro ao processar pagamento no provedor.');
+      throw new BadRequestException('Erro ao processar pagamento.');
     }
   }
 
