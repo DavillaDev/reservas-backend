@@ -26,7 +26,10 @@ import { CustomersModule } from './customers/customers.module';
 import { VipModule } from './modules/vip/vip.module';
 
 // 🔔 NOVO MÓDULO DE NOTIFICAÇÕES
-import { NotificationsModule } from './notifications/notifications.modules'; // 👈 Importação adicionada
+import { NotificationsModule } from './notifications/notifications.modules';
+
+// 💰 MÓDULO DE PAGAMENTOS (NOVO)
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -48,7 +51,8 @@ import { NotificationsModule } from './notifications/notifications.modules'; // 
     ReservationsModule,
     AuthModule,
     VipModule,
-    NotificationsModule, // 👈 Módulo registrado aqui
+    NotificationsModule,
+    PaymentsModule, // 👈 Módulo de Pagamentos registrado aqui
   ],
   controllers: [AppController, UploadController, SuperController],
   providers: [

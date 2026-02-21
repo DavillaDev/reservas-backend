@@ -1,4 +1,3 @@
-// src/reservations/reservations.controller.ts
 import {
   Controller,
   Get,
@@ -8,7 +7,6 @@ import {
   Param,
   Delete,
   Query,
-  HttpCode,
   UseGuards,
   Request,
   UnauthorizedException,
@@ -32,14 +30,13 @@ export class ReservationsController {
   }
 
   // ===========================================================================
-  // 1.5 PÚBLICO: Checar Disponibilidade (Para o Mapa ficar Cinza) 🚨 NOVO!
+  // 1.5 PÚBLICO: Checar Disponibilidade (Para o Mapa ficar Cinza)
   // ===========================================================================
   @Get('availability')
   async checkAvailability(
     @Query('nightclubId') nightclubId: string,
     @Query('date') date: string,
   ) {
-    // Retorna lista de IDs das mesas ocupadas ['uuid-1', 'uuid-2']
     return this.reservationsService.getBookedSpaces(nightclubId, date);
   }
 
@@ -55,33 +52,7 @@ export class ReservationsController {
   }
 
   // ===========================================================================
-  // 3. PÚBLICO: Dados de Checkout (Tela de Pagamento)
-  // ===========================================================================
-  @Get(':id/checkout')
-  async getCheckoutData(@Param('id') id: string) {
-    return this.reservationsService.getCheckoutData(id);
-  }
-
-  // ===========================================================================
-  // 4. PÚBLICO: Webhook Mercado Pago
-  // ===========================================================================
-  @Post('webhook')
-  @HttpCode(200)
-  async handleWebhook(@Body() body: any, @Query() query: any) {
-    const paymentId =
-      body?.data?.id || body?.id || query?.id || query?.['data.id'];
-    const action = body?.action || body?.type || query?.topic;
-
-    if (paymentId && (action === 'payment' || action?.includes('payment'))) {
-      this.reservationsService
-        .processWebhook(paymentId.toString())
-        .catch(console.error);
-    }
-    return { status: 'received' };
-  }
-
-  // ===========================================================================
-  // 5. PRIVADO: Portaria (Check-in via QR Code)
+  // 3. PRIVADO: Portaria (Check-in via QR Code)
   // ===========================================================================
   @UseGuards(JwtAuthGuard)
   @Post('check-in/:token')
@@ -90,7 +61,7 @@ export class ReservationsController {
   }
 
   // ===========================================================================
-  // 6. CRUD PRIVADO: Blindado contra acesso cruzado (Multi-tenancy)
+  // 4. CRUD PRIVADO: Blindado contra acesso cruzado (Multi-tenancy)
   // ===========================================================================
 
   @UseGuards(JwtAuthGuard)
@@ -138,15 +109,5 @@ export class ReservationsController {
       );
     }
     return this.reservationsService.remove(id);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post(':id/pix')
-  async generatePix(@Param('id') id: string, @Request() req: any) {
-    const res = await this.reservationsService.findOne(id);
-    if (!res || res.nightclubId !== req.user.nightclubId) {
-      throw new UnauthorizedException('Ação não permitida.');
-    }
-    return this.reservationsService.generatePix(id);
   }
 }
