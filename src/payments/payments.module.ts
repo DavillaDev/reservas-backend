@@ -2,19 +2,22 @@ import { Module } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
 
-// 👇 Importa o Service direto (já que não tem módulo)
+// Vamos importar as classes DIRETAMENTE
 import { MailService } from '../mail/mail.service';
-// 👇 Importa o Módulo de Notificações (esse eu vi que existe!)
-import { NotificationsModule } from '../notifications/notifications.modules';
+import { PrismaService } from '../../prisma/prisma.service';
+import { ConfigService } from '@nestjs/config';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Module({
-  imports: [
-    NotificationsModule, // 👈 Importa só o módulo que existe
-  ],
+  imports: [], // 👈 Vazio, não vamos depender dos módulos dos outros
   controllers: [PaymentsController],
   providers: [
     PaymentsService,
-    MailService, // 👈 Injeta o MailService solto direto aqui!
+    // 👇 Injetamos TUDO que o construtor do PaymentsService pede, na força bruta.
+    PrismaService,
+    MailService,
+    ConfigService,
+    NotificationsService,
   ],
   exports: [PaymentsService],
 })
