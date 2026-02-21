@@ -15,14 +15,15 @@ export class AuthController {
     return this.authService.login(signInDto.email, signInDto.password);
   }
 
-  // 🛡️ NOVO ENDPOINT: Rota para o Admin criar usuários STAFF para a portaria
-  @Post('register-staff')
-  registerStaff(@Body() staffData: Record<string, any>) {
-    return this.authService.registerStaff({
-      name: staffData.name,
-      email: staffData.email,
-      password: staffData.password,
-      nightclubId: staffData.nightclubId,
+  // 🛡️ ENDPOINT ATUALIZADO: Rota para o Admin criar usuários da equipe (STAFF ou MANAGER)
+  @Post('register-team')
+  registerTeamMember(@Body() teamData: Record<string, any>) {
+    return this.authService.registerTeamMember({
+      name: teamData.name,
+      email: teamData.email,
+      password: teamData.password,
+      nightclubId: teamData.nightclubId,
+      role: teamData.role, // 👈 Agora recebe e repassa a role do Frontend
     });
   }
 }

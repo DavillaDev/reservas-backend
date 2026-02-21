@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -55,13 +56,21 @@ export class AuthService {
     };
   }
 
-  // 🛡️ NOVO MÉTODO: Criação de Usuário STAFF
-  async registerStaff(data: {
+  // 🛡️ MÉTODO ATUALIZADO: Criação de Membros da Equipe (Portaria ou Gerente)
+  async registerTeamMember(data: {
     name: string;
     email: string;
     password: string;
     nightclubId: string;
+    role: 'STAFF' | 'MANAGER';
   }) {
+    // 0. Trava de Segurança Máxima: Impede criação de admins via API pública
+    if (data.role !== 'STAFF' && data.role !== 'MANAGER') {
+      throw new BadRequestException(
+        'Nível de acesso inválido ou não autorizado.',
+      );
+    }
+
     // 1. Verifica se o e-mail já está em uso para evitar duplicidade
     const userExists = await this.prisma.user.findUnique({
       where: { email: data.email },
@@ -71,17 +80,17 @@ export class AuthService {
       throw new ConflictException('Este e-mail já está cadastrado no sistema.');
     }
 
-    // 2. Criptografa a senha da recepcionista para o banco de dados
+    // 2. Criptografa a senha para o banco de dados
     const salt = await bcrypt.genSalt();
     const hashedPassword = await bcrypt.hash(data.password, salt);
 
-    // 3. Salva no banco amarrado à balada do Admin e forçando a role STAFF
+    // 3. Salva no banco amarrado à balada com o nível de acesso correto
     const newUser = await this.prisma.user.create({
       data: {
         name: data.name,
         email: data.email,
         password: hashedPassword,
-        role: 'STAFF', // 🔒 Garantia de segurança: hardcoded como STAFF
+        role: data.role,
         nightclubId: data.nightclubId,
       },
     });

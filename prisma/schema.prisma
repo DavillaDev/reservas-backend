@@ -8,7 +8,7 @@ datasource db {
 }
 
 // =========================================================
-// 1. USUÁRIOS (QUEM LOGA NO SISTEMA: ADMIN/STAFF)
+// 1. USUÁRIOS (QUEM LOGA NO SISTEMA: ADMIN/STAFF/MANAGER)
 // =========================================================
 model User {
   id           String    @id @default(uuid())
@@ -141,7 +141,7 @@ model Reservation {
   customerPhone   String
   customerEmail   String?            
   
-  customerId      String?           
+  customerId      String?            
   customer        Customer?         @relation(fields: [customerId], references: [id])
   
   isBirthday      Boolean           @default(false) 
@@ -215,6 +215,7 @@ model VipGuest {
 enum UserRole {
   SUPERADMIN 
   OWNER      
+  MANAGER    // 👈 NOVO: Perfil de Gerente
   STAFF      
 }
 
