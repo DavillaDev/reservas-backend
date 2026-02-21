@@ -14,4 +14,15 @@ export class AuthController {
     // Chama o service que valida na tabela User e gera o Token
     return this.authService.login(signInDto.email, signInDto.password);
   }
+
+  // 🛡️ NOVO ENDPOINT: Rota para o Admin criar usuários STAFF para a portaria
+  @Post('register-staff')
+  registerStaff(@Body() staffData: Record<string, any>) {
+    return this.authService.registerStaff({
+      name: staffData.name,
+      email: staffData.email,
+      password: staffData.password,
+      nightclubId: staffData.nightclubId,
+    });
+  }
 }
