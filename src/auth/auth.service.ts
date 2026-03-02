@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   ConflictException,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -103,5 +104,47 @@ export class AuthService {
       role: newUser.role,
       nightclubId: newUser.nightclubId,
     };
+  }
+
+  // 🛡️ NOVO: Buscar todos os membros da equipe de uma balada
+  async getTeam(nightclubId: string) {
+    return this.prisma.user.findMany({
+      where: {
+        nightclubId: nightclubId,
+        role: {
+          in: ['MANAGER', 'STAFF'], // Oculta o dono (OWNER) da lista
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+  }
+
+  // 🛡️ NOVO: Deletar um membro da equipe (Demitir)
+  async deleteTeamMember(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+
+    if (user.role === 'OWNER') {
+      throw new BadRequestException('Não é possível remover a conta do Dono.');
+    }
+
+    await this.prisma.user.delete({
+      where: { id: userId },
+    });
+
+    return { message: 'Acesso revogado com sucesso.' };
   }
 }
