@@ -31,6 +31,9 @@ import { NotificationsModule } from './notifications/notifications.modules';
 // 💰 MÓDULO DE PAGAMENTOS (NOVO)
 import { PaymentsModule } from './payments/payments.module';
 
+// 🤖 MÓDULO DE INTELIGÊNCIA ARTIFICIAL (NOVO)
+import { AiModule } from './modules/ai/ai.module';
+
 @Module({
   imports: [
     PrismaModule,
@@ -52,7 +55,8 @@ import { PaymentsModule } from './payments/payments.module';
     AuthModule,
     VipModule,
     NotificationsModule,
-    PaymentsModule, // 👈 Módulo de Pagamentos registrado aqui
+    PaymentsModule,
+    AiModule, // 👈 Módulo de IA registrado aqui
   ],
   controllers: [AppController, UploadController, SuperController],
   providers: [
