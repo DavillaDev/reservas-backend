@@ -10,7 +10,7 @@ import axios from 'axios';
 import { classToPlain } from 'class-transformer';
 import { UpdateNightclubDto } from './dto/update-nightclub.dto';
 import { CreateNightclubDto } from './dto/create-nightclub.dto';
-import { encrypt, decrypt } from '../common/utils/encryption.util'; // 🛡️ Importação crucial
+import { encrypt, decrypt } from '../common/utils/encryption.util';
 
 const MP_OAUTH_BASE_URL = 'https://auth.mercadopago.com/authorization';
 const MP_TOKEN_URL = 'https://api.mercadopago.com/oauth/token';
@@ -45,6 +45,7 @@ export class NightclubsService {
         themeColor: themeColor || '#6366f1',
         logoUrl,
         mapUrl,
+        plan: 'FREE', // 👈 Garante o início no plano gratuito
       },
     });
   }
@@ -62,13 +63,18 @@ export class NightclubsService {
   }
 
   // ===========================================================================
-  // 3. BUSCAR POR ID
+  // 3. BUSCAR POR ID (Utilizado no Dashboard e Paywall)
   // ===========================================================================
   async findOne(id: string) {
     const nightclub = await this.prisma.nightclub.findUnique({
       where: { id },
       include: {
         spaces: { orderBy: { name: 'asc' } },
+        aiAgent: true, // 👈 Incluído para o frontend saber se a IA está configurada
+        whatsappInstances: {
+          take: 1,
+          orderBy: { createdAt: 'desc' },
+        },
       },
     });
 
@@ -99,8 +105,6 @@ export class NightclubsService {
     const dataToUpdate: any = { ...restOfData };
 
     if (settings) {
-      // 🛡️ Nota de Sócio: Se o front enviar tokens nas settings,
-      // precisamos garantir que eles não sobrescrevam a criptografia.
       dataToUpdate.settings = classToPlain(settings);
     }
 
@@ -116,6 +120,8 @@ export class NightclubsService {
   // ===========================================================================
   async remove(id: string) {
     return this.prisma.$transaction(async (tx) => {
+      await tx.whatsappInstance.deleteMany({ where: { nightclubId: id } }); // 👈 Adicionado
+      await tx.aiAgent.deleteMany({ where: { nightclubId: id } }); // 👈 Adicionado
       await tx.reservation.deleteMany({ where: { nightclubId: id } });
       await tx.space.deleteMany({ where: { nightclubId: id } });
       await tx.user.deleteMany({ where: { nightclubId: id } });
@@ -164,7 +170,6 @@ export class NightclubsService {
     }
 
     try {
-      // 1. Troca o código pelo Token Real
       const tokenResponse = await axios.post<MpTokenResponse>(MP_TOKEN_URL, {
         client_id: clientId,
         client_secret: clientSecret,
@@ -188,13 +193,11 @@ export class NightclubsService {
           ? (nightclub.settings as any)
           : {};
 
-      // 🛡️ CRIPTOGRAFIA AT-REST:
-      // Transformamos o token em um hash seguro antes de persistir no banco.
       const updatedSettings = {
         ...currentSettings,
         mpAccountId: String(user_id),
-        mpAccessToken: encrypt(access_token), // 🔐 Blindado
-        mpRefreshToken: refresh_token ? encrypt(refresh_token) : null, // 🔐 Blindado
+        mpAccessToken: encrypt(access_token),
+        mpRefreshToken: refresh_token ? encrypt(refresh_token) : null,
         mpPublicKey: public_key,
         mpConnectStatus: 'CONNECTED',
         mpConnectDate: new Date().toISOString(),
