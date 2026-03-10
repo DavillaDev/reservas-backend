@@ -57,29 +57,33 @@ model PushSubscription {
 // 2. A BALADA (O CLIENTE QUE TE PAGA)
 // =========================================================
 model Nightclub {
-  id             String    @id @default(uuid())
-  name           String
-  slug           String    @unique
-  logoUrl        String?  
-  mapUrl         String?  
-  themeColor     String?   @default("#697cafff")
-  whatsapp       String
-  vipTokens      VipToken[]
+  id               String    @id @default(uuid())
+  name             String
+  slug             String    @unique
+  logoUrl          String?  
+  mapUrl           String?  
+  themeColor       String?   @default("#697cafff")
+  whatsapp         String
+  vipTokens        VipToken[]
   
-  appFeePercent  Decimal   @default(5.0) 
-  mpAccessToken  String?  
+  appFeePercent    Decimal   @default(5.0) 
+  mpAccessToken    String?  
 
   repassPixKey      String?
   repassPixKeyType  String? 
   
-  settings       Json?     
+  settings         Json?     
 
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  users          User[]        
-  spaces         Space[]
-  reservations   Reservation[]
+  users            User[]        
+  spaces           Space[]
+  reservations     Reservation[]
+  
+  // 🔔 NOVA RELAÇÃO: SaaS de IA e WhatsApp
+  whatsappInstances WhatsappInstance[]
+  aiAgent           AiAgent?
 
   @@map("nightclubs")
 }
@@ -132,33 +136,33 @@ model Customer {
 // 5. AS RESERVAS
 // =========================================================
 model Reservation {
-  id              String            @id @default(uuid())
-  nightclubId     String
-  spaceId         String
-  date            DateTime          @db.Date
+  id               String            @id @default(uuid())
+  nightclubId      String
+  spaceId          String
+  date             DateTime          @db.Date
   
-  customerName    String
-  customerPhone   String
-  customerEmail   String?            
+  customerName     String
+  customerPhone    String
+  customerEmail    String?            
   
-  customerId      String?            
-  customer        Customer?         @relation(fields: [customerId], references: [id])
+  customerId       String?            
+  customer         Customer?         @relation(fields: [customerId], references: [id])
   
-  isBirthday      Boolean           @default(false) 
-  birthdayDate    DateTime?         
-  notes           String?            
+  isBirthday       Boolean           @default(false) 
+  birthdayDate     DateTime?         
+  notes            String?            
 
-  status          ReservationStatus @default(PENDING)
-  checkInTime     DateTime?
-  checkInAt       DateTime? 
-  validationToken String? @unique
+  status           ReservationStatus @default(PENDING)
+  checkInTime      DateTime?
+  checkInAt        DateTime? 
+  validationToken  String? @unique
 
   amount           Decimal?   @default(0.0)
   paymentId        String?    @unique 
   paymentCreatedAt DateTime?
   paymentDeadline  DateTime?
   
-  createdAt       DateTime          @default(now())
+  createdAt        DateTime          @default(now())
 
   nightclub Nightclub @relation(fields: [nightclubId], references: [id])
   space     Space     @relation(fields: [spaceId], references: [id])
@@ -206,6 +210,39 @@ model VipGuest {
   createdAt    DateTime    @default(now())
 
   @@map("vip_guests")
+}
+
+// =========================================================
+// 8. INSTÂNCIAS DE WHATSAPP (EVOLUTION API) - NOVO
+// =========================================================
+model WhatsappInstance {
+  id              String    @id @default(uuid())
+  nightclubId     String
+  instanceName    String    @unique // Ex: upbar_123
+  status          String    @default("DISCONNECTED") // CONNECTED, DISCONNECTED, QRCODE
+  qrCode          String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  nightclub       Nightclub @relation(fields: [nightclubId], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_instances")
+}
+
+// =========================================================
+// 9. CONFIGURAÇÃO DA IA (GEMINI) - NOVO
+// =========================================================
+model AiAgent {
+  id              String    @id @default(uuid())
+  nightclubId     String    @unique
+  systemPrompt    String    @db.Text
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  nightclub       Nightclub @relation(fields: [nightclubId], references: [id], onDelete: Cascade)
+
+  @@map("ai_agents")
 }
 
 // =========================================================
