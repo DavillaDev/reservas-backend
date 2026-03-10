@@ -11,6 +11,7 @@ import {
   Query,
   UnauthorizedException,
   Request,
+  Headers, // Adicionado
 } from '@nestjs/common';
 import { NightclubsService } from './nightclubs.service';
 import { CreateNightclubDto } from './dto/create-nightclub.dto';
@@ -25,7 +26,27 @@ export class NightclubsController {
   constructor(private readonly nightclubsService: NightclubsService) {}
 
   // ===========================================================================
-  // 1. MERCADO PAGO OAUTH CALLBACK (PÚBLICO)
+  // 1. ROTA PARA O MICROSERVIÇO DE IA (PROTEGIDA POR INTERNAL KEY)
+  // ===========================================================================
+  @Get('service-ia/:id')
+  async findOneForIA(
+    @Param('id') id: string,
+    @Headers('x-internal-key') internalKey: string,
+  ) {
+    const masterKey = process.env.INTERNAL_SERVICE_KEY;
+
+    if (!internalKey || internalKey !== masterKey) {
+      console.error(
+        `[IA Access] Tentativa de acesso não autorizado ao ID: ${id}`,
+      );
+      throw new UnauthorizedException('Chave de serviço inválida.');
+    }
+
+    return this.nightclubsService.findOne(id);
+  }
+
+  // ===========================================================================
+  // 2. MERCADO PAGO OAUTH CALLBACK (PÚBLICO)
   // ===========================================================================
   @Get('oauth/callback')
   async handleMpCallback(
@@ -35,10 +56,7 @@ export class NightclubsController {
   ) {
     try {
       if (!code || !nightclubId) throw new Error('Dados ausentes');
-
       await this.nightclubsService.handleMpCallback(code, nightclubId);
-
-      // Redireciona de volta para o admin com sucesso
       return res.redirect(
         `${FRONTEND_URL}/admin/settings?status=success&mp=connected`,
       );
@@ -50,15 +68,9 @@ export class NightclubsController {
     }
   }
 
-  // ===========================================================================
-  // 2. INICIAR CONEXÃO (AJUSTADO PARA FUNCIONAR VIA LINK 🔗)
-  // ===========================================================================
-  // Removido o JwtAuthGuard aqui porque links <a> não enviam Headers Authorization
   @Get('connect/:id')
   async startMpConnect(@Param('id') nightclubId: string, @Res() res: any) {
     try {
-      // Como não temos o req.user aqui (pelo link direto),
-      // o generateMpConnectUrl usa o nightclubId como 'state' para o MP.
       const redirectUrl =
         await this.nightclubsService.generateMpConnectUrl(nightclubId);
       return res.redirect(redirectUrl);
@@ -68,8 +80,6 @@ export class NightclubsController {
       );
     }
   }
-
-  // --- RESTANTE DO CRUD (MANTENDO PROTEGIDO) ---
 
   @UseGuards(MasterAuthGuard)
   @Post()
