@@ -15,7 +15,7 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   // ===========================================================================
-  // 1. ROTA DE CHECKOUT (Chamada pelo Frontend)
+  // 1. ROTA DE CHECKOUT (Chamada pelo Frontend para Reservas)
   // ===========================================================================
   @Get('checkout/:id')
   async getCheckoutData(@Param('id') id: string) {
@@ -23,7 +23,16 @@ export class PaymentsController {
   }
 
   // ===========================================================================
-  // 2. ROTA DE WEBHOOK (Chamada pelo Mercado Pago)
+  // 2. ROTA DE UPGRADE PREMIUM (Chamada pelo Frontend para Planos)
+  // ===========================================================================
+  @Post('upgrade')
+  @HttpCode(HttpStatus.OK)
+  async createPremiumUpgrade(@Body('nightclubId') nightclubId: string) {
+    return this.paymentsService.createPremiumPreference(nightclubId);
+  }
+
+  // ===========================================================================
+  // 3. ROTA DE WEBHOOK (Chamada pelo Mercado Pago)
   // ===========================================================================
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
@@ -42,7 +51,7 @@ export class PaymentsController {
       });
     }
 
-    // Retorna OK imediatamente
+    // Retorna OK imediatamente para o MP
     return { status: 'success', message: 'Notificação recebida' };
   }
 }
