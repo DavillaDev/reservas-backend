@@ -3,13 +3,14 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  InternalServerErrorException, // 👈 Adicionado para erros de configuração
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config';
 import { NotificationsService } from '../notifications/notifications.service';
-import { MercadoPagoConfig, Payment, Preference } from 'mercadopago'; // 👈 Adicionado Preference
-import { addMinutes, addYears, isAfter } from 'date-fns'; // 👈 Adicionado addYears
+import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
+import { addMinutes, addYears, isAfter } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../common/utils/encryption.util';
 
@@ -75,13 +76,21 @@ export class PaymentsService {
       ? Number(reservation.nightclub.appFeePercent) / 100
       : 0.05;
 
-    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+    // 🛡️ Forçamos o TypeScript a entender que isso deve ser uma string
+    const platformToken =
+      this.configService.get<string>('MP_PLATFORM_ACCESS_TOKEN') || '';
     const rawToken = reservation.nightclub.mpAccessToken;
 
     const accessTokenParaUsar =
       rawToken && rawToken.includes(':')
         ? decrypt(rawToken)
         : rawToken || platformToken;
+
+    if (!accessTokenParaUsar) {
+      throw new InternalServerErrorException(
+        'Token do Mercado Pago não configurado.',
+      );
+    }
 
     const client = new MercadoPagoConfig({ accessToken: accessTokenParaUsar });
     const payment = new Payment(client);
@@ -190,7 +199,7 @@ export class PaymentsService {
   }
 
   // ===========================================================================
-  // 3. UPGRADE PREMIUM (NOVO)
+  // 3. UPGRADE PREMIUM
   // ===========================================================================
   async createPremiumPreference(nightclubId: string) {
     const nightclub = await this.prisma.nightclub.findUnique({
@@ -199,7 +208,16 @@ export class PaymentsService {
 
     if (!nightclub) throw new NotFoundException('Balada não encontrada.');
 
-    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+    const platformToken = this.configService.get<string>(
+      'MP_PLATFORM_ACCESS_TOKEN',
+    );
+
+    if (!platformToken) {
+      throw new InternalServerErrorException(
+        'MP_PLATFORM_ACCESS_TOKEN não definida no .env do backend.',
+      );
+    }
+
     const client = new MercadoPagoConfig({ accessToken: platformToken });
     const preference = new Preference(client);
 
@@ -211,7 +229,7 @@ export class PaymentsService {
               id: 'premium-plan-ia',
               title: 'Plano Premium IA - ReservasClub',
               quantity: 1,
-              unit_price: 1900, // Valor total de R$ 1.900,00
+              unit_price: 1900,
               description: 'Automação de WhatsApp e IA para Reservas',
             },
           ],
@@ -223,7 +241,7 @@ export class PaymentsService {
           },
           auto_return: 'approved',
           payment_methods: {
-            installments: 12, // Permite parcelamento em até 12x
+            installments: 12,
           },
         },
       });
@@ -241,8 +259,14 @@ export class PaymentsService {
   // 4. WEBHOOK (RESERVAS + PLANO PREMIUM)
   // ===========================================================================
   async processWebhook(paymentId: string) {
-    // 1. Primeiro, tentamos ver se é um pagamento de plano (usando o token da plataforma)
-    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+    const platformToken =
+      this.configService.get<string>('MP_PLATFORM_ACCESS_TOKEN') || '';
+
+    if (!platformToken) {
+      console.error('[WEBHOOK_ERROR] MP_PLATFORM_ACCESS_TOKEN ausente.');
+      return;
+    }
+
     const platformClient = new MercadoPagoConfig({
       accessToken: platformToken,
     });
@@ -255,7 +279,6 @@ export class PaymentsService {
 
       const externalRef = paymentData.external_reference;
 
-      // VERIFICAÇÃO: É UM UPGRADE DE PLANO?
       if (externalRef && externalRef.startsWith('PREMIUM_UPGRADE:')) {
         const nightclubId = externalRef.split(':')[1];
 
@@ -263,7 +286,7 @@ export class PaymentsService {
           where: { id: nightclubId },
           data: {
             plan: 'PREMIUM',
-            planExpiresAt: addYears(new Date(), 1), // Plano válido por 1 ano
+            planExpiresAt: addYears(new Date(), 1),
           },
         });
 
@@ -271,7 +294,6 @@ export class PaymentsService {
         return;
       }
 
-      // SE NÃO FOR PLANO, PROSSEGUE PARA LÓGICA DE RESERVA
       const reservation = await this.prisma.reservation.findFirst({
         where: {
           paymentId: paymentId.toString(),
@@ -281,23 +303,17 @@ export class PaymentsService {
       });
 
       if (!reservation) {
-        // Se não achou com o token da plataforma, pode ser de um token direto da balada
-        // Aqui você já tem a lógica de busca do token da balada no seu código original
-        // Vamos manter a compatibilidade com sua lógica existente:
         this.handleReservationPayment(paymentId);
         return;
       }
 
-      // Lógica de confirmação da reserva (mesma do seu código)
       await this.confirmReservation(reservation.id, paymentId);
     } catch (error: any) {
       console.error('❌ Erro no processamento do Webhook:', error.message);
     }
   }
 
-  // Métodos auxiliares para manter o processWebhook limpo
   private async handleReservationPayment(paymentId: string) {
-    // Busca a reserva para pegar o token correto
     const reservation = await this.prisma.reservation.findFirst({
       where: { paymentId: paymentId.toString() },
       include: { nightclub: true },
@@ -305,18 +321,26 @@ export class PaymentsService {
 
     if (!reservation) return;
 
+    const platformToken =
+      this.configService.get<string>('MP_PLATFORM_ACCESS_TOKEN') || '';
     const rawToken = reservation.nightclub.mpAccessToken;
     const activeAccessToken =
       rawToken && rawToken.includes(':')
         ? decrypt(rawToken)
-        : rawToken || this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+        : rawToken || platformToken;
+
+    if (!activeAccessToken) return;
 
     const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
     const payment = new Payment(client);
 
-    const data = await payment.get({ id: paymentId });
-    if (data.status === 'approved') {
-      await this.confirmReservation(reservation.id, paymentId);
+    try {
+      const data = await payment.get({ id: paymentId });
+      if (data.status === 'approved') {
+        await this.confirmReservation(reservation.id, paymentId);
+      }
+    } catch (err) {
+      console.error('[handleReservationPayment] Erro:', err);
     }
   }
 
