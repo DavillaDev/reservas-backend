@@ -8,8 +8,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config';
 import { NotificationsService } from '../notifications/notifications.service';
-import { MercadoPagoConfig, Payment } from 'mercadopago';
-import { addMinutes, isAfter } from 'date-fns';
+import { MercadoPagoConfig, Payment, Preference } from 'mercadopago'; // 👈 Adicionado Preference
+import { addMinutes, addYears, isAfter } from 'date-fns'; // 👈 Adicionado addYears
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../common/utils/encryption.util';
 
@@ -23,7 +23,7 @@ export class PaymentsService {
   ) {}
 
   // ===========================================================================
-  // 1. CHECKOUT
+  // 1. CHECKOUT (RESERVAS)
   // ===========================================================================
   async getCheckoutData(id: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -56,7 +56,7 @@ export class PaymentsService {
   }
 
   // ===========================================================================
-  // 2. GERAR PIX
+  // 2. GERAR PIX (RESERVAS)
   // ===========================================================================
   async generatePix(reservationId: string) {
     const reservation = await this.prisma.reservation.findUnique({
@@ -69,16 +69,6 @@ export class PaymentsService {
 
     if (!reservation) {
       throw new NotFoundException('Reserva não encontrada.');
-    }
-
-    // 🛡️ ESTRATÉGIA ANTI-BLOQUEIO (RATE LIMIT 429)
-    if (
-      reservation.paymentId &&
-      reservation.paymentDeadline &&
-      new Date(reservation.paymentDeadline) > new Date() &&
-      reservation.status === 'PENDING'
-    ) {
-      // Retornar os dados do banco seria o ideal aqui, mas prosseguimos com a trava de segurança.
     }
 
     const percentage = reservation.nightclub.appFeePercent
@@ -144,7 +134,6 @@ export class PaymentsService {
           email: validEmail,
           first_name: reservation.customerName.split(' ')[0] || 'Cliente',
         },
-        // 👇 AQUI: URL de notificação atualizada para bater no novo controlador de pagamentos! 👇
         notification_url: `https://reservas-backend-fa4b.onrender.com/payments/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
@@ -201,76 +190,161 @@ export class PaymentsService {
   }
 
   // ===========================================================================
-  // 3. WEBHOOK
+  // 3. UPGRADE PREMIUM (NOVO)
   // ===========================================================================
-  async processWebhook(paymentId: string) {
-    const reservation = await this.prisma.reservation.findFirst({
-      where: {
-        paymentId: paymentId.toString(),
-        status: { in: ['PENDING', 'CANCELED'] },
-      },
-      include: { nightclub: true },
+  async createPremiumPreference(nightclubId: string) {
+    const nightclub = await this.prisma.nightclub.findUnique({
+      where: { id: nightclubId },
     });
 
-    if (!reservation) {
-      console.log(
-        `[WEBHOOK] Pagamento ${paymentId} ignorado ou já processado.`,
-      );
-      return;
-    }
+    if (!nightclub) throw new NotFoundException('Balada não encontrada.');
 
     const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
-    const rawToken = reservation.nightclub.mpAccessToken;
+    const client = new MercadoPagoConfig({ accessToken: platformToken });
+    const preference = new Preference(client);
 
-    const activeAccessToken =
-      rawToken && rawToken.includes(':')
-        ? decrypt(rawToken)
-        : rawToken || platformToken;
+    try {
+      const response = await preference.create({
+        body: {
+          items: [
+            {
+              id: 'premium-plan-ia',
+              title: 'Plano Premium IA - ReservasClub',
+              quantity: 1,
+              unit_price: 1900, // Valor total de R$ 1.900,00
+              description: 'Automação de WhatsApp e IA para Reservas',
+            },
+          ],
+          external_reference: `PREMIUM_UPGRADE:${nightclubId}`,
+          notification_url: `https://reservas-backend-fa4b.onrender.com/payments/webhook`,
+          back_urls: {
+            success: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=success`,
+            failure: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=error`,
+          },
+          auto_return: 'approved',
+          payment_methods: {
+            installments: 12, // Permite parcelamento em até 12x
+          },
+        },
+      });
 
-    const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
-    const payment = new Payment(client);
+      return { initPoint: response.init_point };
+    } catch (error: any) {
+      console.error('❌ ERRO AO CRIAR PREFERÊNCIA:', error.message);
+      throw new BadRequestException(
+        'Erro ao gerar link de pagamento do plano.',
+      );
+    }
+  }
+
+  // ===========================================================================
+  // 4. WEBHOOK (RESERVAS + PLANO PREMIUM)
+  // ===========================================================================
+  async processWebhook(paymentId: string) {
+    // 1. Primeiro, tentamos ver se é um pagamento de plano (usando o token da plataforma)
+    const platformToken = this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+    const platformClient = new MercadoPagoConfig({
+      accessToken: platformToken,
+    });
+    const payment = new Payment(platformClient);
 
     try {
       const paymentData = await payment.get({ id: paymentId });
 
-      if (paymentData.status !== 'approved') {
+      if (paymentData.status !== 'approved') return;
+
+      const externalRef = paymentData.external_reference;
+
+      // VERIFICAÇÃO: É UM UPGRADE DE PLANO?
+      if (externalRef && externalRef.startsWith('PREMIUM_UPGRADE:')) {
+        const nightclubId = externalRef.split(':')[1];
+
+        await this.prisma.nightclub.update({
+          where: { id: nightclubId },
+          data: {
+            plan: 'PREMIUM',
+            planExpiresAt: addYears(new Date(), 1), // Plano válido por 1 ano
+          },
+        });
+
+        console.log(`✨ [WEBHOOK] Balada ${nightclubId} agora é PREMIUM!`);
         return;
       }
 
-      const validationToken = uuidv4();
-
-      const updated = await this.prisma.reservation.update({
-        where: { id: reservation.id },
-        data: {
-          status: 'CONFIRMED',
-          validationToken,
+      // SE NÃO FOR PLANO, PROSSEGUE PARA LÓGICA DE RESERVA
+      const reservation = await this.prisma.reservation.findFirst({
+        where: {
+          paymentId: paymentId.toString(),
+          status: { in: ['PENDING', 'CANCELED'] },
         },
-        include: { space: true, nightclub: true },
+        include: { nightclub: true },
       });
 
-      console.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada com sucesso.`);
-
-      if (updated.customerEmail) {
-        await this.mailService
-          .sendReservationConfirmation(updated as any, updated.nightclub.name)
-          .catch((err) => console.error('Erro e-mail:', err.message));
+      if (!reservation) {
+        // Se não achou com o token da plataforma, pode ser de um token direto da balada
+        // Aqui você já tem a lógica de busca do token da balada no seu código original
+        // Vamos manter a compatibilidade com sua lógica existente:
+        this.handleReservationPayment(paymentId);
+        return;
       }
 
-      await this.notificationsService
-        .notifyNewReservation(updated.nightclubId, {
-          id: updated.id,
-          customerName: updated.customerName,
-          spaceName: updated.space.name,
-        })
-        .catch((err) => console.error('Erro Push:', err.message));
+      // Lógica de confirmação da reserva (mesma do seu código)
+      await this.confirmReservation(reservation.id, paymentId);
     } catch (error: any) {
-      if (error.status === 404 || error.message?.includes('not found')) {
-        console.warn(
-          `[WEBHOOK_WARN] Pagamento ${paymentId} ainda não indexado no MP. Aguardando próxima notificação...`,
-        );
-      } else {
-        console.error('❌ Erro Crítico Webhook:', error.message);
-      }
+      console.error('❌ Erro no processamento do Webhook:', error.message);
     }
+  }
+
+  // Métodos auxiliares para manter o processWebhook limpo
+  private async handleReservationPayment(paymentId: string) {
+    // Busca a reserva para pegar o token correto
+    const reservation = await this.prisma.reservation.findFirst({
+      where: { paymentId: paymentId.toString() },
+      include: { nightclub: true },
+    });
+
+    if (!reservation) return;
+
+    const rawToken = reservation.nightclub.mpAccessToken;
+    const activeAccessToken =
+      rawToken && rawToken.includes(':')
+        ? decrypt(rawToken)
+        : rawToken || this.configService.get('MP_PLATFORM_ACCESS_TOKEN');
+
+    const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
+    const payment = new Payment(client);
+
+    const data = await payment.get({ id: paymentId });
+    if (data.status === 'approved') {
+      await this.confirmReservation(reservation.id, paymentId);
+    }
+  }
+
+  private async confirmReservation(reservationId: string, paymentId: string) {
+    const validationToken = uuidv4();
+    const updated = await this.prisma.reservation.update({
+      where: { id: reservationId },
+      data: {
+        status: 'CONFIRMED',
+        validationToken,
+      },
+      include: { space: true, nightclub: true },
+    });
+
+    console.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada.`);
+
+    if (updated.customerEmail) {
+      await this.mailService
+        .sendReservationConfirmation(updated as any, updated.nightclub.name)
+        .catch((err) => console.error('Erro e-mail:', err.message));
+    }
+
+    await this.notificationsService
+      .notifyNewReservation(updated.nightclubId, {
+        id: updated.id,
+        customerName: updated.customerName,
+        spaceName: updated.space.name,
+      })
+      .catch((err) => console.error('Erro Push:', err.message));
   }
 }
