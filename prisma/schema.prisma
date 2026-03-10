@@ -11,17 +11,17 @@ datasource db {
 // 1. USUÁRIOS (QUEM LOGA NO SISTEMA: ADMIN/STAFF/MANAGER)
 // =========================================================
 model User {
-  id           String    @id @default(uuid())
-  email        String    @unique
-  password     String    // Senha Hasheada (Bcrypt)
-  name         String
+  id                String             @id @default(uuid())
+  email             String             @unique
+  password          String // Senha Hasheada (Bcrypt)
+  name              String
   
   // Controle de Acesso
-  role         UserRole @default(STAFF)
+  role              UserRole           @default(STAFF)
   
   // Vínculo: A qual balada esse usuário pertence?
-  nightclubId  String?
-  nightclub    Nightclub? @relation(fields: [nightclubId], references: [id])
+  nightclubId       String?
+  nightclub         Nightclub?         @relation(fields: [nightclubId], references: [id])
 
   // 🔔 NOVA RELAÇÃO: Dispositivos para notificações push
   pushSubscriptions PushSubscription[]
@@ -36,14 +36,14 @@ model User {
 // NOVO: ARMAZENAMENTO DE TOKENS DE NOTIFICAÇÃO
 // =========================================================
 model PushSubscription {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
   // Dados técnicos que o navegador gera (WebPush)
-  endpoint  String   @unique
-  auth      String
-  p256dh    String
+  endpoint   String   @unique
+  auth       String
+  p256dh     String
   
   // Para sabermos se é o celular do dono, gerente, etc.
   deviceName String?  @default("Dispositivo Desconhecido")
@@ -57,29 +57,33 @@ model PushSubscription {
 // 2. A BALADA (O CLIENTE QUE TE PAGA)
 // =========================================================
 model Nightclub {
-  id               String    @id @default(uuid())
-  name             String
-  slug             String    @unique
-  logoUrl          String?  
-  mapUrl           String?  
-  themeColor       String?   @default("#697cafff")
-  whatsapp         String
-  vipTokens        VipToken[]
+  id                String             @id @default(uuid())
+  name              String
+  slug              String             @unique
+  logoUrl           String?  
+  mapUrl            String?  
+  themeColor        String?            @default("#697cafff")
+  whatsapp          String
+  vipTokens         VipToken[]
   
-  appFeePercent    Decimal   @default(5.0) 
-  mpAccessToken    String?  
+  appFeePercent     Decimal            @default(5.0) 
+  mpAccessToken     String?  
 
   repassPixKey      String?
   repassPixKeyType  String? 
   
-  settings         Json?     
+  settings          Json?     
 
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  // 💰 GESTÃO DE PLANOS (NOVO)
+  plan              NightclubPlan      @default(FREE)
+  planExpiresAt     DateTime?
 
-  users            User[]        
-  spaces           Space[]
-  reservations     Reservation[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  users             User[]        
+  spaces            Space[]
+  reservations      Reservation[]
   
   // 🔔 NOVA RELAÇÃO: SaaS de IA e WhatsApp
   whatsappInstances WhatsappInstance[]
@@ -136,33 +140,33 @@ model Customer {
 // 5. AS RESERVAS
 // =========================================================
 model Reservation {
-  id               String            @id @default(uuid())
-  nightclubId      String
-  spaceId          String
-  date             DateTime          @db.Date
+  id                String            @id @default(uuid())
+  nightclubId       String
+  spaceId           String
+  date              DateTime          @db.Date
   
-  customerName     String
-  customerPhone    String
-  customerEmail    String?            
+  customerName      String
+  customerPhone     String
+  customerEmail     String?            
   
-  customerId       String?            
-  customer         Customer?         @relation(fields: [customerId], references: [id])
+  customerId        String?            
+  customer          Customer?          @relation(fields: [customerId], references: [id])
   
-  isBirthday       Boolean           @default(false) 
-  birthdayDate     DateTime?         
-  notes            String?            
+  isBirthday        Boolean           @default(false) 
+  birthdayDate      DateTime?         
+  notes             String?            
 
-  status           ReservationStatus @default(PENDING)
-  checkInTime      DateTime?
-  checkInAt        DateTime? 
-  validationToken  String? @unique
+  status            ReservationStatus @default(PENDING)
+  checkInTime       DateTime?
+  checkInAt         DateTime? 
+  validationToken   String? @unique
 
-  amount           Decimal?   @default(0.0)
-  paymentId        String?    @unique 
-  paymentCreatedAt DateTime?
-  paymentDeadline  DateTime?
+  amount            Decimal?   @default(0.0)
+  paymentId         String?    @unique 
+  paymentCreatedAt  DateTime?
+  paymentDeadline   DateTime?
   
-  createdAt        DateTime          @default(now())
+  createdAt         DateTime          @default(now())
 
   nightclub Nightclub @relation(fields: [nightclubId], references: [id])
   space     Space     @relation(fields: [spaceId], references: [id])
@@ -281,4 +285,10 @@ enum VipGuestStatus {
   PENDING      
   CHECKED_IN   
   CANCELLED    
+}
+
+// NOVO: PLANOS DO SAAS
+enum NightclubPlan {
+  FREE
+  PREMIUM
 }
