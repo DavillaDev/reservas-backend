@@ -271,16 +271,50 @@ export class ReservationsService {
   // ===========================================================================
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
+    // Usamos o ISOString para garantir que a comparação seja feita em UTC puro
     const now = new Date();
-    const result = await this.prisma.reservation.updateMany({
-      where: {
-        status: 'PENDING',
-        paymentDeadline: { lt: now },
-      },
-      data: { status: 'CANCELED' },
-    });
-    if (result.count > 0)
-      console.log(`[CRON] 🧹 ${result.count} reservas expiradas canceladas.`);
+
+    try {
+      // 1. Primeiro, vamos contar se existem reservas que DEVERIAM ser canceladas (para debug)
+      const countPending = await this.prisma.reservation.count({
+        where: {
+          status: 'PENDING',
+          paymentDeadline: {
+            lt: now,
+            not: null, // Garante que não estamos tentando comparar com campos vazios
+          },
+        },
+      });
+
+      if (countPending > 0) {
+        console.log(
+          `[CRON] 🔍 Encontradas ${countPending} reservas candidatas ao cancelamento. (Agora: ${now.toISOString()})`,
+        );
+      }
+
+      // 2. Executa o update
+      const result = await this.prisma.reservation.updateMany({
+        where: {
+          status: 'PENDING',
+          paymentDeadline: {
+            lt: now,
+            not: null,
+          },
+        },
+        data: { status: 'CANCELED' },
+      });
+
+      if (result.count > 0) {
+        console.log(
+          `[CRON] 🧹 ${result.count} reservas expiradas foram canceladas com sucesso.`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[CRON ERROR] Falha ao processar faxina de reservas:`,
+        error.message,
+      );
+    }
   }
 
   // ===========================================================================
