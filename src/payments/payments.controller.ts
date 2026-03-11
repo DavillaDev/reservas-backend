@@ -7,6 +7,8 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  Headers,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 
@@ -20,6 +22,25 @@ export class PaymentsController {
   @Get('checkout/:id')
   async getCheckoutData(@Param('id') id: string) {
     return this.paymentsService.getCheckoutData(id);
+  }
+
+  // ===========================================================================
+  // 1.5. ROTA PARA A IA: GERAR PIX DIRETO 🚀 [O ELO PERDIDO]
+  // ===========================================================================
+  @Post('generate-pix')
+  @HttpCode(HttpStatus.OK)
+  async generatePixForAI(
+    @Body('reservationId') reservationId: string,
+    @Headers('x-internal-key') internalKey: string,
+  ) {
+    const masterKey = process.env.INTERNAL_SERVICE_KEY;
+
+    if (!internalKey || internalKey !== masterKey) {
+      throw new UnauthorizedException('Chave de serviço inválida.');
+    }
+
+    // Chama o service que você já tem pronto e completo!
+    return this.paymentsService.generatePix(reservationId);
   }
 
   // ===========================================================================
@@ -37,12 +58,9 @@ export class PaymentsController {
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
   async handleWebhook(@Body() body: any, @Query() query: any) {
-    // O Mercado Pago pode enviar o ID do pagamento no Body (v1) ou na Query URL (v2)
     const paymentId = body?.data?.id || query?.['data.id'] || query?.id;
 
     if (paymentId) {
-      // 🛡️ Executa em background (sem await) para liberar o Mercado Pago rapidamente
-      // e evitar que ele fique reenviando notificações repetidas por timeout.
       this.paymentsService.processWebhook(paymentId.toString()).catch((err) => {
         console.error(
           '❌ Erro no processamento assíncrono do Webhook:',
@@ -51,7 +69,6 @@ export class PaymentsController {
       });
     }
 
-    // Retorna OK imediatamente para o MP
     return { status: 'success', message: 'Notificação recebida' };
   }
 }

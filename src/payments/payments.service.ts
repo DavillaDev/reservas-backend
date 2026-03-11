@@ -3,7 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
-  InternalServerErrorException, // 👈 Adicionado para erros de configuração
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
@@ -13,6 +13,7 @@ import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
 import { addMinutes, addYears, isAfter } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../common/utils/encryption.util';
+import axios from 'axios'; // 👈 Importado para falar com a IA/Evolution
 
 @Injectable()
 export class PaymentsService {
@@ -46,7 +47,7 @@ export class PaymentsService {
       isAfter(new Date(), new Date(reservation.paymentDeadline))
     ) {
       await this.prisma.reservation.update({
-        where: { id },
+        where: { id: id },
         data: { status: 'CANCELED' },
       });
       throw new ConflictException('O prazo para pagamento expirou.');
@@ -76,7 +77,6 @@ export class PaymentsService {
       ? Number(reservation.nightclub.appFeePercent) / 100
       : 0.05;
 
-    // 🛡️ Forçamos o TypeScript a entender que isso deve ser uma string
     const platformToken =
       this.configService.get<string>('MP_PLATFORM_ACCESS_TOKEN') || '';
     const rawToken = reservation.nightclub.mpAccessToken;
@@ -96,7 +96,6 @@ export class PaymentsService {
     const payment = new Payment(client);
 
     try {
-      // 1. Tentar recuperar pagamento existente
       if (
         reservation.paymentId &&
         reservation.paymentDeadline &&
@@ -126,7 +125,6 @@ export class PaymentsService {
         }
       }
 
-      // 2. Gerar novo pagamento
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
       const validEmail = reservation.customerEmail?.includes('@')
@@ -186,9 +184,7 @@ export class PaymentsService {
       };
     } catch (error: any) {
       if (error.status === 429) {
-        throw new BadRequestException(
-          'Muitas requisições. Aguarde alguns segundos.',
-        );
+        throw new BadRequestException('Muitas requisições. Aguarde.');
       }
       console.error(
         '❌ ERRO MERCADO PAGO:',
@@ -199,7 +195,7 @@ export class PaymentsService {
   }
 
   // ===========================================================================
-  // 3. UPGRADE PREMIUM
+  // 3. UPGRADE PREMIUM (SaaS Planos)
   // ===========================================================================
   async createPremiumPreference(nightclubId: string) {
     const nightclub = await this.prisma.nightclub.findUnique({
@@ -211,12 +207,10 @@ export class PaymentsService {
     const platformToken = this.configService.get<string>(
       'MP_PLATFORM_ACCESS_TOKEN',
     );
-
-    if (!platformToken) {
+    if (!platformToken)
       throw new InternalServerErrorException(
-        'MP_PLATFORM_ACCESS_TOKEN não definida no .env do backend.',
+        'MP_PLATFORM_ACCESS_TOKEN ausente.',
       );
-    }
 
     const client = new MercadoPagoConfig({ accessToken: platformToken });
     const preference = new Preference(client);
@@ -240,18 +234,12 @@ export class PaymentsService {
             failure: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=error`,
           },
           auto_return: 'approved',
-          payment_methods: {
-            installments: 12,
-          },
+          payment_methods: { installments: 12 },
         },
       });
-
       return { initPoint: response.init_point };
     } catch (error: any) {
-      console.error('❌ ERRO AO CRIAR PREFERÊNCIA:', error.message);
-      throw new BadRequestException(
-        'Erro ao gerar link de pagamento do plano.',
-      );
+      throw new BadRequestException('Erro ao gerar link de pagamento.');
     }
   }
 
@@ -261,12 +249,6 @@ export class PaymentsService {
   async processWebhook(paymentId: string) {
     const platformToken =
       this.configService.get<string>('MP_PLATFORM_ACCESS_TOKEN') || '';
-
-    if (!platformToken) {
-      console.error('[WEBHOOK_ERROR] MP_PLATFORM_ACCESS_TOKEN ausente.');
-      return;
-    }
-
     const platformClient = new MercadoPagoConfig({
       accessToken: platformToken,
     });
@@ -274,22 +256,16 @@ export class PaymentsService {
 
     try {
       const paymentData = await payment.get({ id: paymentId });
-
       if (paymentData.status !== 'approved') return;
 
       const externalRef = paymentData.external_reference;
 
       if (externalRef && externalRef.startsWith('PREMIUM_UPGRADE:')) {
         const nightclubId = externalRef.split(':')[1];
-
         await this.prisma.nightclub.update({
           where: { id: nightclubId },
-          data: {
-            plan: 'PREMIUM',
-            planExpiresAt: addYears(new Date(), 1),
-          },
+          data: { plan: 'PREMIUM', planExpiresAt: addYears(new Date(), 1) },
         });
-
         console.log(`✨ [WEBHOOK] Balada ${nightclubId} agora é PREMIUM!`);
         return;
       }
@@ -309,7 +285,7 @@ export class PaymentsService {
 
       await this.confirmReservation(reservation.id, paymentId);
     } catch (error: any) {
-      console.error('❌ Erro no processamento do Webhook:', error.message);
+      console.error('❌ Erro no Webhook:', error.message);
     }
   }
 
@@ -344,6 +320,9 @@ export class PaymentsService {
     }
   }
 
+  // ===========================================================================
+  // 5. CONFIRMAÇÃO FINAL (E-MAIL + PUSH + WHATSAPP 🚀)
+  // ===========================================================================
   private async confirmReservation(reservationId: string, paymentId: string) {
     const validationToken = uuidv4();
     const updated = await this.prisma.reservation.update({
@@ -357,18 +336,62 @@ export class PaymentsService {
 
     console.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada.`);
 
+    // 1. E-mail
     if (updated.customerEmail) {
-      await this.mailService
+      this.mailService
         .sendReservationConfirmation(updated as any, updated.nightclub.name)
         .catch((err) => console.error('Erro e-mail:', err.message));
     }
 
-    await this.notificationsService
+    // 2. Push Notification (Admin)
+    this.notificationsService
       .notifyNewReservation(updated.nightclubId, {
         id: updated.id,
         customerName: updated.customerName,
         spaceName: updated.space.name,
       })
       .catch((err) => console.error('Erro Push:', err.message));
+
+    // 3. 📲 WHATSAPP AUTOMÁTICO (O Ingresso QR Code)
+    this.dispararIngressoWhatsapp(updated).catch((err) =>
+      console.error('❌ Erro no Ingresso WhatsApp:', err.message),
+    );
+  }
+
+  private async dispararIngressoWhatsapp(reservation: any) {
+    try {
+      const serviceIaUrl =
+        this.configService.get('SERVICE_IA_URL') || 'http://localhost:10000';
+      const internalKey = this.configService.get('INTERNAL_SERVICE_KEY');
+
+      const mensagem =
+        `✅ *PAGAMENTO CONFIRMADO!*\n\n` +
+        `Olá *${reservation.customerName}*, sua reserva na *${reservation.nightclub.name.toUpperCase()}* está garantida.\n\n` +
+        `📍 *Setor:* ${reservation.space.name}\n` +
+        `🎫 *Código de Entrada:* ${reservation.validationToken}\n\n` +
+        `Apresente este código (ou seu documento) na recepção. Boa festa! 🥂`;
+
+      // Chamada para o Microserviço de IA disparar a mensagem via Evolution
+      await axios.post(
+        `${serviceIaUrl}/whatsapp/send-message`,
+        {
+          nightclubId: reservation.nightclubId,
+          number: reservation.customerPhone,
+          text: mensagem,
+        },
+        {
+          headers: { 'x-internal-key': internalKey },
+        },
+      );
+
+      console.log(
+        `📲 [WhatsApp] Ingresso enviado para ${reservation.customerPhone}`,
+      );
+    } catch (error) {
+      console.error(
+        'Falha ao disparar ingresso automático via WhatsApp:',
+        error.message,
+      );
+    }
   }
 }
