@@ -292,3 +292,19 @@ enum NightclubPlan {
   FREE
   PREMIUM
 }
+
+// =========================================================
+// 10. MEMÓRIA DA IA (HISTÓRICO DE CONVERSAS PERSISTENTE) 🛰️
+// =========================================================
+model AiMemory {
+  id            String   @id @default(uuid())
+  nightclubId   String
+  customerPhone String
+  role          String   // "user" (cliente) ou "model" (IA)
+  content       String   @db.Text
+  createdAt     DateTime @default(now())
+
+  // Index para a busca de histórico ser instantânea
+  @@index([nightclubId, customerPhone])
+  @@map("ai_memory")
+}
