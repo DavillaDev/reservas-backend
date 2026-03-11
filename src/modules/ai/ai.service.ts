@@ -2,54 +2,92 @@ import {
   Injectable,
   InternalServerErrorException,
   NotFoundException,
+  Logger, // 👈 Adicionamos o Logger nativo
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import axios from 'axios';
 
 @Injectable()
 export class AiService {
+  private readonly logger = new Logger(AiService.name);
   private readonly serviceIaUrl =
     process.env.SERVICE_IA_URL || 'http://localhost:3001';
 
   constructor(private prisma: PrismaService) {}
 
-  // 📲 Solicita QR Code ao microserviço
+  // ===========================================================================
+  // 📲 CONEXÃO COM O WHATSAPP (Cria ou Reconecta)
+  // ===========================================================================
   async requestWhatsappInstance(nightclubId: string) {
     try {
+      this.logger.log(
+        `Tentando criar nova instância na Evolution para: ${nightclubId}`,
+      );
+
       const response = await axios.post(
         `${this.serviceIaUrl}/instances/create`,
-        {
-          nightclubId,
-        },
+        { nightclubId },
       );
 
       return response.data;
     } catch (error: any) {
-      console.error(
-        '[AiService] Erro ao solicitar instância:',
-        error.response?.data || error.message,
+      const errorData = error.response?.data || {};
+      const errorString = JSON.stringify(errorData).toLowerCase();
+
+      // 🛡️ BLINDAGEM: Se o erro indicar que a instância já existe (409 ou mensagem específica)
+      if (
+        error.response?.status === 409 ||
+        errorString.includes('already exists') ||
+        errorString.includes('já existe')
+      ) {
+        this.logger.warn(
+          `⚠️ Instância ${nightclubId} já existe na Evolution. Solicitando novo QR Code...`,
+        );
+
+        try {
+          // 🔄 ROTA DE FUGA: Em vez de criar, apenas pede para conectar
+          const fallbackResponse = await axios.get(
+            `${this.serviceIaUrl}/instances/connect/${nightclubId}`,
+          );
+
+          return fallbackResponse.data;
+        } catch (fallbackError: any) {
+          this.logger.error(
+            '❌ Erro no Fallback de reconexão:',
+            fallbackError.response?.data || fallbackError.message,
+          );
+          throw new InternalServerErrorException(
+            'Falha ao resgatar o QR Code da instância existente.',
+          );
+        }
+      }
+
+      // Se for um erro real (Evolution caiu, sem internet, etc)
+      this.logger.error(
+        '❌ Erro ao solicitar criação de instância:',
+        errorData || error.message,
       );
       throw new InternalServerErrorException(
-        'Não foi possível gerar o QR Code do WhatsApp.',
+        'Não foi possível comunicar com o servidor de IA/WhatsApp.',
       );
     }
   }
 
-  // 🤖 Salva as configurações de treinamento e status do robô
+  // ===========================================================================
+  // 🤖 CONFIGURAÇÕES DA IA
+  // ===========================================================================
   async updateSettings(
     nightclubId: string,
     isActive: boolean,
     systemPrompt: string,
   ) {
     try {
-      // Verifica se a balada existe antes de criar o agente
       const nightclub = await this.prisma.nightclub.findUnique({
         where: { id: nightclubId },
       });
 
       if (!nightclub) throw new NotFoundException('Balada não encontrada.');
 
-      // Upsert: Cria se não existir, atualiza se já existir
       const agent = await this.prisma.aiAgent.upsert({
         where: { nightclubId },
         update: {
@@ -65,7 +103,7 @@ export class AiService {
 
       return agent;
     } catch (error: any) {
-      console.error('[AiService] Erro ao salvar configurações:', error.message);
+      this.logger.error('❌ Erro ao salvar configurações:', error.message);
       throw new InternalServerErrorException(
         'Erro ao salvar as configurações da IA.',
       );
