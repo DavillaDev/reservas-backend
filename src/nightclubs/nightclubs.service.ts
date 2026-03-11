@@ -120,8 +120,8 @@ export class NightclubsService {
   // ===========================================================================
   async remove(id: string) {
     return this.prisma.$transaction(async (tx) => {
-      await tx.whatsappInstance.deleteMany({ where: { nightclubId: id } }); // 👈 Adicionado
-      await tx.aiAgent.deleteMany({ where: { nightclubId: id } }); // 👈 Adicionado
+      await tx.whatsappInstance.deleteMany({ where: { nightclubId: id } });
+      await tx.aiAgent.deleteMany({ where: { nightclubId: id } });
       await tx.reservation.deleteMany({ where: { nightclubId: id } });
       await tx.space.deleteMany({ where: { nightclubId: id } });
       await tx.user.deleteMany({ where: { nightclubId: id } });
@@ -217,5 +217,19 @@ export class NightclubsService {
         'Erro na conexão com Mercado Pago. Tente novamente.',
       );
     }
+  }
+
+  // ===========================================================================
+  // 9. ATUALIZAR STATUS DA INSTÂNCIA WHATSAPP (SENTINELA 🛰️)
+  // ===========================================================================
+  async updateInstanceStatus(instanceName: string, status: string) {
+    console.log(
+      `[Sentinela] Atualizando status de ${instanceName} para: ${status}`,
+    );
+
+    return this.prisma.whatsappInstance.update({
+      where: { instanceName },
+      data: { status: status.toUpperCase() },
+    });
   }
 }

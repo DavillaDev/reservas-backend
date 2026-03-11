@@ -11,7 +11,7 @@ import {
   Query,
   UnauthorizedException,
   Request,
-  Headers, // Adicionado
+  Headers,
 } from '@nestjs/common';
 import { NightclubsService } from './nightclubs.service';
 import { CreateNightclubDto } from './dto/create-nightclub.dto';
@@ -26,7 +26,58 @@ export class NightclubsController {
   constructor(private readonly nightclubsService: NightclubsService) {}
 
   // ===========================================================================
-  // 1. ROTA PARA O MICROSERVIÇO DE IA (PROTEGIDA POR INTERNAL KEY)
+  // 1. ROTA VIP: ATUALIZAR STATUS DA INSTÂNCIA (CHAMADA PELA IA) 🚀 [NOVO]
+  // ===========================================================================
+  @Patch('instance/status')
+  async updateInstanceStatus(
+    @Body() data: { instanceName: string; status: string },
+    @Headers('x-internal-key') internalKey: string,
+  ) {
+    const masterKey = process.env.INTERNAL_SERVICE_KEY;
+
+    if (!internalKey || internalKey !== masterKey) {
+      console.error(`[Status Update] Tentativa de acesso não autorizado.`);
+      throw new UnauthorizedException('Chave de serviço inválida.');
+    }
+
+    return this.nightclubsService.updateInstanceStatus(
+      data.instanceName,
+      data.status,
+    );
+  }
+
+  // ===========================================================================
+  // 1.5. 🛰️ WEBHOOK DIRETO DA EVOLUTION (STATUS DE CONEXÃO E QR CODE)
+  // ===========================================================================
+  @Post('webhook/whatsapp')
+  async handleWhatsappWebhook(@Body() body: any) {
+    const event = body.event;
+    const instanceName = body.instance;
+
+    // A Evolution manda o status dentro de data.state (open, close, connecting)
+    if (event === 'connection.update') {
+      const status = body.data?.state || body.data?.status;
+      if (status) {
+        console.log(
+          `[Evolution Webhook] Instância ${instanceName} mudou para: ${status}`,
+        );
+        await this.nightclubsService.updateInstanceStatus(instanceName, status);
+      }
+    }
+
+    if (event === 'qrcode.updated') {
+      console.log(
+        `[Evolution Webhook] Novo QR Code gerado para: ${instanceName}`,
+      );
+      // Futuramente podemos emitir via WebSocket aqui para a tela atualizar na hora
+    }
+
+    // Responder 200 rápido para a Evolution não tentar reenviar
+    return { received: true };
+  }
+
+  // ===========================================================================
+  // 2. ROTA PARA O MICROSERVIÇO DE IA (PROTEGIDA POR INTERNAL KEY)
   // ===========================================================================
   @Get('service-ia/:id')
   async findOneForIA(
@@ -46,7 +97,7 @@ export class NightclubsController {
   }
 
   // ===========================================================================
-  // 2. MERCADO PAGO OAUTH CALLBACK (PÚBLICO)
+  // 3. MERCADO PAGO OAUTH CALLBACK (PÚBLICO)
   // ===========================================================================
   @Get('oauth/callback')
   async handleMpCallback(
@@ -80,6 +131,8 @@ export class NightclubsController {
       );
     }
   }
+
+  // --- RESTANTE DO CRUD (MANTENDO PROTEGIDO) ---
 
   @UseGuards(MasterAuthGuard)
   @Post()
