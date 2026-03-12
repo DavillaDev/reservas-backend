@@ -412,12 +412,19 @@ export class PaymentsService {
         this.configService.get('SERVICE_IA_URL') || 'http://localhost:10000';
       const internalKey = this.configService.get('INTERNAL_SERVICE_KEY');
 
+      // Puxa a URL do frontend (ou usa o padrão) para montar o link dinâmico
+      const frontendUrl =
+        this.configService.get('FRONTEND_URL') || 'https://reservasclub.com';
+      const checkoutLink = `${frontendUrl}/checkout/${reservation.id}`;
+
+      // Monta a mensagem enviando o link como sendo o Ingresso Digital
       const mensagem =
         `✅ *PAGAMENTO CONFIRMADO!*\n\n` +
-        `Olá *${reservation.customerName}*, sua reserva na *${reservation.nightclub.name.toUpperCase()}* está garantida.\n\n` +
-        `📍 *Setor:* ${reservation.space.name}\n` +
-        `🎫 *Código de Entrada:* ${reservation.validationToken}\n\n` +
-        `Apresente este código (ou seu documento) na recepção. Boa festa! 🥂`;
+        `Fala *${reservation.customerName.split(' ')[0]}*! Sua reserva na *${reservation.nightclub.name.toUpperCase()}* está garantida.\n\n` +
+        `📍 *Setor:* ${reservation.space.name}\n\n` +
+        `🎫 *SEU INGRESSO DIGITAL ESTÁ AQUI:*\n` +
+        `${checkoutLink}\n\n` +
+        `Acesse o link acima para abrir seu QR Code de entrada. Apresente na portaria e boa festa! 🥂`;
 
       // 🛡️ Envio de mensagem com retry e timeout para não falhar à toa
       await this.withRetry(() =>
@@ -436,7 +443,7 @@ export class PaymentsService {
       );
 
       this.logger.log(
-        `📲 [WhatsApp] Ingresso enviado para ${reservation.customerPhone}`,
+        `📲 [WhatsApp] Ingresso (Link Checkout) enviado para ${reservation.customerPhone}`,
       );
     } catch (error: any) {
       this.logger.error(
