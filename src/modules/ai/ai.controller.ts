@@ -37,7 +37,33 @@ export class AiController {
   }
 
   // ===========================================================================
-  // 2. SALVAR CONFIGURAÇÕES E INSTRUÇÕES DA IA 🚀 [NOVO]
+  // 1.5 GERAR CÓDIGO DE PAREAMENTO (NOVO MÉTODO) 🔢
+  // ===========================================================================
+  @UseGuards(JwtAuthGuard)
+  @Post('whatsapp/connect-code')
+  async connectWhatsappWithCode(
+    @Body('nightclubId') nightclubId: string,
+    @Body('number') number: string,
+    @Request() req: any,
+  ) {
+    // Trava de segurança: O dono só mexe na própria balada (ou se for MASTER)
+    if (req.user.nightclubId !== nightclubId && req.user.role !== 'MASTER') {
+      throw new UnauthorizedException('Acesso negado.');
+    }
+
+    const result = await this.aiService.requestWhatsappCode(
+      nightclubId,
+      number,
+    );
+
+    return {
+      message: 'Código de pareamento gerado com sucesso!',
+      data: result, // Aqui vai voltar o { success: true, code: 'XXXX-XXXX' }
+    };
+  }
+
+  // ===========================================================================
+  // 2. SALVAR CONFIGURAÇÕES E INSTRUÇÕES DA IA 🚀
   // ===========================================================================
   @UseGuards(JwtAuthGuard)
   @Patch('settings')

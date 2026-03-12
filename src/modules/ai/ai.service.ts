@@ -2,7 +2,7 @@ import {
   Injectable,
   InternalServerErrorException,
   NotFoundException,
-  Logger, // 👈 Adicionamos o Logger nativo
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import axios from 'axios';
@@ -16,7 +16,7 @@ export class AiService {
   constructor(private prisma: PrismaService) {}
 
   // ===========================================================================
-  // 📲 CONEXÃO COM O WHATSAPP (Cria ou Reconecta)
+  // 📲 CONEXÃO COM O WHATSAPP (Cria ou Reconecta via QR Code)
   // ===========================================================================
   async requestWhatsappInstance(nightclubId: string) {
     try {
@@ -69,6 +69,34 @@ export class AiService {
       );
       throw new InternalServerErrorException(
         'Não foi possível comunicar com o servidor de IA/WhatsApp.',
+      );
+    }
+  }
+
+  // ===========================================================================
+  // 🔢 CONEXÃO COM O WHATSAPP (Via Código de Pareamento)
+  // ===========================================================================
+  async requestWhatsappCode(nightclubId: string, number: string) {
+    try {
+      this.logger.log(
+        `🔢 Tentando solicitar Código de Pareamento para a balada: ${nightclubId}, número: ${number}`,
+      );
+
+      const response = await axios.post(
+        `${this.serviceIaUrl}/instances/connect-code`,
+        { nightclubId, number },
+      );
+
+      return response.data; // Vai retornar o { success: true, code: "XXXX-XXXX" }
+    } catch (error: any) {
+      const errorData = error.response?.data || {};
+      this.logger.error(
+        '❌ Erro ao solicitar Código de Pareamento:',
+        errorData || error.message,
+      );
+      throw new InternalServerErrorException(
+        errorData.error ||
+          'Não foi possível gerar o código de pareamento. Verifique se o formato do número está correto.',
       );
     }
   }
