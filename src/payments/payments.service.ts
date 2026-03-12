@@ -34,7 +34,6 @@ export class PaymentsService {
       try {
         return await operation();
       } catch (error: any) {
-        // Se for erro de validação (400 a 499, exceto 429 Rate Limit), não tenta de novo
         if (error.status >= 400 && error.status < 500 && error.status !== 429) {
           throw error;
         }
@@ -44,7 +43,7 @@ export class PaymentsService {
           throw error;
         }
 
-        const delay = attempt * 1000; // Exponential backoff simples: 1s, 2s, 3s...
+        const delay = attempt * 1000;
         this.logger.warn(
           `⚠️ Falha na API externa. Tentativa ${attempt}/${maxRetries}. Retentando em ${delay}ms...`,
         );
@@ -133,7 +132,6 @@ export class PaymentsService {
         new Date(reservation.paymentDeadline) > new Date()
       ) {
         try {
-          // 🛡️ Recuperação blindada com tipagem flexível
           const existing: any = await this.withRetry(() =>
             payment.get({ id: reservation.paymentId as string }),
           );
@@ -184,9 +182,8 @@ export class PaymentsService {
         paymentBody.application_fee = myFee;
       }
 
-      let response: any; // 🛡️ Tipagem ajustada
+      let response: any;
       try {
-        // 🛡️ Criação de pagamento blindada
         response = await this.withRetry(() =>
           payment.create({ body: paymentBody }),
         );
@@ -255,7 +252,6 @@ export class PaymentsService {
     const preference = new Preference(client);
 
     try {
-      // 🛡️ Geração de link blindada
       const response: any = await this.withRetry(() =>
         preference.create({
           body: {
@@ -286,7 +282,7 @@ export class PaymentsService {
   }
 
   // ===========================================================================
-  // 4. WEBHOOK (RESERVAS + PLANO PREMIUM)
+  // 4. WEBHOOK (RESERVAS + PLANO PREMIUM) BLINDADO CONTRA DUPLICIDADE
   // ===========================================================================
   async processWebhook(paymentId: string) {
     const platformToken =
@@ -297,7 +293,6 @@ export class PaymentsService {
     const payment = new Payment(platformClient);
 
     try {
-      // 🛡️ Leitura do Webhook blindada
       const paymentData: any = await this.withRetry(() =>
         payment.get({ id: paymentId }),
       );
@@ -315,56 +310,38 @@ export class PaymentsService {
         return;
       }
 
+      // 🛡️ Busca usando a referência ou o ID para ser à prova de falhas
       const reservation = await this.prisma.reservation.findFirst({
         where: {
-          paymentId: paymentId.toString(),
-          status: { in: ['PENDING', 'CANCELED'] },
+          OR: [
+            { id: externalRef || undefined },
+            { paymentId: paymentId.toString() },
+          ],
         },
         include: { nightclub: true },
       });
 
       if (!reservation) {
-        await this.handleReservationPayment(paymentId);
+        this.logger.warn(
+          `❌ [WEBHOOK] Reserva não encontrada para o Pagamento MP: ${paymentId}`,
+        );
+        return;
+      }
+
+      // 🛡️ TRAVA DE DUPLICIDADE: Se já confirmou, ignora!
+      if (
+        reservation.status === 'CONFIRMED' ||
+        reservation.status === 'CHECKED_IN'
+      ) {
+        this.logger.log(
+          `⚠️ [WEBHOOK] Ignorando notificação duplicada. Reserva ${reservation.id} já confirmada.`,
+        );
         return;
       }
 
       await this.confirmReservation(reservation.id, paymentId);
     } catch (error: any) {
       this.logger.error('❌ Erro no Webhook:', error.message);
-    }
-  }
-
-  private async handleReservationPayment(paymentId: string) {
-    const reservation = await this.prisma.reservation.findFirst({
-      where: { paymentId: paymentId.toString() },
-      include: { nightclub: true },
-    });
-
-    if (!reservation) return;
-
-    const platformToken =
-      this.configService.get<string>('MP_PLATFORM_ACCESS_TOKEN') || '';
-    const rawToken = reservation.nightclub.mpAccessToken;
-    const activeAccessToken =
-      rawToken && rawToken.includes(':')
-        ? decrypt(rawToken)
-        : rawToken || platformToken;
-
-    if (!activeAccessToken) return;
-
-    const client = new MercadoPagoConfig({ accessToken: activeAccessToken });
-    const payment = new Payment(client);
-
-    try {
-      // 🛡️ Leitura do pagamento blindada
-      const data: any = await this.withRetry(() =>
-        payment.get({ id: paymentId }),
-      );
-      if (data.status === 'approved') {
-        await this.confirmReservation(reservation.id, paymentId);
-      }
-    } catch (err: any) {
-      this.logger.error('[handleReservationPayment] Erro:', err.message);
     }
   }
 
@@ -378,6 +355,7 @@ export class PaymentsService {
       data: {
         status: 'CONFIRMED',
         validationToken,
+        paymentId: paymentId.toString(),
       },
       include: { space: true, nightclub: true },
     });
@@ -400,7 +378,7 @@ export class PaymentsService {
       })
       .catch((err) => this.logger.error('Erro Push:', err.message));
 
-    // 3. 📲 WHATSAPP AUTOMÁTICO (O Ingresso QR Code)
+    // 3. 📲 WHATSAPP AUTOMÁTICO (O Ingresso QR Code pelo Link FrontEnd)
     this.dispararIngressoWhatsapp(updated).catch((err) =>
       this.logger.error('❌ Erro no Ingresso WhatsApp:', err.message),
     );
@@ -412,12 +390,10 @@ export class PaymentsService {
         this.configService.get('SERVICE_IA_URL') || 'http://localhost:10000';
       const internalKey = this.configService.get('INTERNAL_SERVICE_KEY');
 
-      // Puxa a URL do frontend (ou usa o padrão) para montar o link dinâmico
       const frontendUrl =
-        this.configService.get('FRONTEND_URL') || 'https://reservasclub.com';
+        this.configService.get('FRONTEND_URL') || 'https://reservasclub.com.br';
       const checkoutLink = `${frontendUrl}/checkout/${reservation.id}`;
 
-      // Monta a mensagem enviando o link como sendo o Ingresso Digital
       const mensagem =
         `✅ *PAGAMENTO CONFIRMADO!*\n\n` +
         `Fala *${reservation.customerName.split(' ')[0]}*! Sua reserva na *${reservation.nightclub.name.toUpperCase()}* está garantida.\n\n` +
@@ -426,7 +402,7 @@ export class PaymentsService {
         `${checkoutLink}\n\n` +
         `Acesse o link acima para abrir seu QR Code de entrada. Apresente na portaria e boa festa! 🥂`;
 
-      // 🛡️ Envio de mensagem com retry e timeout para não falhar à toa
+      // 🛡️ Envio de mensagem com retry
       await this.withRetry(() =>
         axios.post(
           `${serviceIaUrl}/whatsapp/send-message`,
@@ -437,7 +413,7 @@ export class PaymentsService {
           },
           {
             headers: { 'x-internal-key': internalKey },
-            timeout: 5000, // 5s por tentativa
+            timeout: 5000,
           },
         ),
       );
