@@ -159,9 +159,15 @@ export class PaymentsService {
 
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
-      const validEmail = reservation.customerEmail?.includes('@')
-        ? reservation.customerEmail.trim().toLowerCase()
-        : `cliente.${reservation.id.substring(0, 5)}@reservasclub.com.br`;
+
+      // 🛡️ BLINDAGEM DO E-MAIL PARA O MERCADO PAGO
+      const rawEmail = reservation.customerEmail || '';
+      const validEmail =
+        typeof rawEmail === 'string' &&
+        rawEmail.includes('@') &&
+        rawEmail.includes('.')
+          ? rawEmail.trim().toLowerCase()
+          : `cliente.${reservation.id.substring(0, 8)}@reservasclub.com.br`;
 
       const myFee = Number((amount * percentage).toFixed(2));
 
@@ -171,7 +177,7 @@ export class PaymentsService {
         payment_method_id: 'pix',
         payer: {
           email: validEmail,
-          first_name: reservation.customerName.split(' ')[0] || 'Cliente',
+          first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
         },
         notification_url: `https://reservas-backend-fa4b.onrender.com/payments/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
