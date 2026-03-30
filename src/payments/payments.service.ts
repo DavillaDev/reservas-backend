@@ -103,11 +103,28 @@ export class PaymentsService {
       throw new NotFoundException('Reserva não encontrada.');
     }
 
-    const percentage = reservation.nightclub.appFeePercent
-      ? Number(reservation.nightclub.appFeePercent) / 100
-      : 0.05;
+    // 🛡️ NOVO: Lendo os dados de dentro do JSON "settings"
+    let nightclubSettings: any = {};
+    if (reservation.nightclub.settings) {
+      if (typeof reservation.nightclub.settings === 'string') {
+        try {
+          nightclubSettings = JSON.parse(reservation.nightclub.settings);
+        } catch (e) {
+          this.logger.error('Erro ao ler settings da balada:', e);
+        }
+      } else {
+        nightclubSettings = reservation.nightclub.settings;
+      }
+    }
 
-    const rawToken = reservation.nightclub.mpAccessToken;
+    // 🎯 Puxa a taxa do settings (se não tiver, puxa da raiz da tabela, se não 5%)
+    const rawAppFee =
+      nightclubSettings.appFeePercent || reservation.nightclub.appFeePercent;
+    const percentage = rawAppFee ? Number(rawAppFee) / 100 : 0.05;
+
+    // 🎯 Puxa o token criptografado do settings ou da raiz da tabela
+    const rawToken =
+      nightclubSettings.mpAccessToken || reservation.nightclub.mpAccessToken;
 
     // 🛡️ TRAVA DE SEGURANÇA: Se a balada não tem token, bloqueia a reserva
     if (!rawToken) {
