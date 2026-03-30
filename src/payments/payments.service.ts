@@ -107,18 +107,33 @@ export class PaymentsService {
       ? Number(reservation.nightclub.appFeePercent) / 100
       : 0.05;
 
-    const platformToken =
-      this.configService.get<string>('MP_PLATFORM_ACCESS_TOKEN') || '';
     const rawToken = reservation.nightclub.mpAccessToken;
 
-    const accessTokenParaUsar =
-      rawToken && rawToken.includes(':')
+    // 🛡️ TRAVA DE SEGURANÇA: Se a balada não tem token, bloqueia a reserva
+    if (!rawToken) {
+      throw new BadRequestException(
+        'A balada ainda não configurou o Mercado Pago para receber pagamentos.',
+      );
+    }
+
+    let accessTokenParaUsar = '';
+    try {
+      accessTokenParaUsar = rawToken.includes(':')
         ? decrypt(rawToken)
-        : rawToken || platformToken;
+        : rawToken;
+    } catch (error) {
+      this.logger.error(
+        `Erro ao descriptografar token da balada ${reservation.nightclubId}`,
+        error,
+      );
+      throw new InternalServerErrorException(
+        'Erro nas credenciais de pagamento da balada.',
+      );
+    }
 
     if (!accessTokenParaUsar) {
       throw new InternalServerErrorException(
-        'Token do Mercado Pago não configurado.',
+        'Token do Mercado Pago da balada é inválido ou nulo.',
       );
     }
 
@@ -160,7 +175,6 @@ export class PaymentsService {
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
 
-      // 🛡️ BLINDAGEM DO E-MAIL PARA O MERCADO PAGO
       const rawEmail = reservation.customerEmail || '';
       const validEmail =
         typeof rawEmail === 'string' &&
@@ -184,7 +198,8 @@ export class PaymentsService {
         external_reference: reservation.id,
       };
 
-      if (rawToken && amount > 2) {
+      // Só aplica a taxa da plataforma se for um valor razoável (> 2 reais para cobrir tarifas mínimas se houver)
+      if (amount > 2) {
         paymentBody.application_fee = myFee;
       }
 
@@ -197,6 +212,7 @@ export class PaymentsService {
         const errorData = mpError.response?.data || {};
         const errorMsg = errorData.message || mpError.message || '';
 
+        // Se der pau na taxa de aplicação (ex: dono tentando comprar na própria balada e o MP barrando)
         if (errorMsg.includes('application_fee')) {
           delete paymentBody.application_fee;
           response = await this.withRetry(() =>
