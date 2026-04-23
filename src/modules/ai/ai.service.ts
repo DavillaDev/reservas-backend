@@ -102,12 +102,17 @@ export class AiService {
   }
 
   // ===========================================================================
-  // 🤖 CONFIGURAÇÕES DA IA
+  // 🤖 CONFIGURAÇÕES DA IA (MODULARIZADO)
   // ===========================================================================
   async updateSettings(
     nightclubId: string,
     isActive: boolean,
-    systemPrompt: string,
+    systemPrompt: string, // Backup antigo
+    promptIdentity?: string,
+    promptTable?: string,
+    promptBirthday?: string,
+    promptEvents?: string,
+    promptSchedule?: any,
   ) {
     try {
       const nightclub = await this.prisma.nightclub.findUnique({
@@ -116,16 +121,27 @@ export class AiService {
 
       if (!nightclub) throw new NotFoundException('Balada não encontrada.');
 
+      // O Upsert atualiza as colunas se o registro já existir, ou cria se for novo
       const agent = await this.prisma.aiAgent.upsert({
         where: { nightclubId },
         update: {
           isActive,
           systemPrompt,
+          promptIdentity,
+          promptTable,
+          promptBirthday,
+          promptEvents,
+          promptSchedule: promptSchedule ? promptSchedule : undefined, // Garante segurança do JSON
         },
         create: {
           nightclubId,
           isActive,
           systemPrompt,
+          promptIdentity,
+          promptTable,
+          promptBirthday,
+          promptEvents,
+          promptSchedule: promptSchedule ? promptSchedule : undefined,
         },
       });
 

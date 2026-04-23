@@ -58,19 +58,27 @@ export class AiController {
 
     return {
       message: 'Código de pareamento gerado com sucesso!',
-      data: result, // Aqui vai voltar o { success: true, code: 'XXXX-XXXX' }
+      data: result,
     };
   }
 
   // ===========================================================================
-  // 2. SALVAR CONFIGURAÇÕES E INSTRUÇÕES DA IA 🚀
+  // 2. SALVAR CONFIGURAÇÕES E INSTRUÇÕES DA IA 🚀 (MODULARIZADO)
   // ===========================================================================
   @UseGuards(JwtAuthGuard)
   @Patch('settings')
   async updateSettings(
     @Body('nightclubId') nightclubId: string,
     @Body('isActive') isActive: boolean,
-    @Body('systemPrompt') systemPrompt: string,
+    @Body('systemPrompt') systemPrompt: string, // Mantemos por retrocompatibilidade
+
+    // 🛡️ NOSSOS NOVOS CAMPOS FATIADOS
+    @Body('promptIdentity') promptIdentity: string,
+    @Body('promptTable') promptTable: string,
+    @Body('promptBirthday') promptBirthday: string,
+    @Body('promptEvents') promptEvents: string,
+    @Body('promptSchedule') promptSchedule: any,
+
     @Request() req: any,
   ) {
     // Trava de segurança
@@ -78,10 +86,16 @@ export class AiController {
       throw new UnauthorizedException('Acesso negado.');
     }
 
+    // Repassamos todos os campos novos pro service
     const result = await this.aiService.updateSettings(
       nightclubId,
       isActive,
       systemPrompt,
+      promptIdentity,
+      promptTable,
+      promptBirthday,
+      promptEvents,
+      promptSchedule,
     );
 
     return {

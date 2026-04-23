@@ -104,6 +104,9 @@ model Space {
   status          SpaceStatus @default(ACTIVE)
   
   price           Decimal?    @default(0.0)
+  // 🎂 NOVO: PREÇO ESPECIAL PARA ANIVERSÁRIOS
+  birthdayPrice   Decimal?    @default(0.0) 
+  
   minConsumption  Decimal?    @default(0.0)
 
   description     String?
@@ -147,14 +150,14 @@ model Reservation {
   
   customerName      String
   customerPhone     String
-  customerEmail     String?            
+  customerEmail     String?           
   
-  customerId        String?            
+  customerId        String?           
   customer          Customer?          @relation(fields: [customerId], references: [id])
   
   isBirthday        Boolean           @default(false) 
   birthdayDate      DateTime?         
-  notes             String?            
+  notes             String?           
 
   status            ReservationStatus @default(PENDING)
   checkInTime       DateTime?
@@ -239,14 +242,23 @@ model WhatsappInstance {
 model AiAgent {
   id              String    @id @default(uuid())
   nightclubId     String    @unique
-  systemPrompt    String    @db.Text
-  isActive        Boolean   @default(true)
+  systemPrompt    String?   @db.Text // Passamos para opcional (?) para não dar conflito na transição
+  isActive        Boolean   @default(true) // Mantive o seu padrão original
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  // 🛡️ NOVAS COLUNAS MODULARIZADAS
+  promptIdentity  String?   @db.Text // Tom de voz, endereço e postura
+  promptTable     String?   @db.Text // Regras exclusivas de Mesa
+  promptBirthday  String?   @db.Text // Regras exclusivas de Aniversário
+  promptEvents    String?   @db.Text // Eventos especiais e avisos
+  
+  // 📅 PROGRAMAÇÃO (A única exceção)
+  promptSchedule  Json?      // Aqui usamos Json porque a estrutura varia muito
+
   nightclub       Nightclub @relation(fields: [nightclubId], references: [id], onDelete: Cascade)
 
-  @@map("ai_agents")
+  @@map("ai_agents") // 👈 O GRANDE SEGREDO: Isso garante que o Prisma não apague sua tabela!
 }
 
 // =========================================================
