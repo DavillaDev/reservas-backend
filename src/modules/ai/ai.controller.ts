@@ -79,6 +79,10 @@ export class AiController {
     @Body('promptEvents') promptEvents: string,
     @Body('promptSchedule') promptSchedule: any,
 
+    // 💰 PRECIFICAÇÃO E 📸 MÍDIAS (NOVOS CAMPOS AQUI 👇)
+    @Body('birthdayPrice') birthdayPrice: string | number,
+    @Body('mediaLinks') mediaLinks: any,
+
     @Request() req: any,
   ) {
     // Trava de segurança
@@ -86,7 +90,7 @@ export class AiController {
       throw new UnauthorizedException('Acesso negado.');
     }
 
-    // Repassamos todos os campos novos pro service
+    // Repassamos TODOS os campos pro service, incluindo os novos
     const result = await this.aiService.updateSettings(
       nightclubId,
       isActive,
@@ -96,6 +100,8 @@ export class AiController {
       promptBirthday,
       promptEvents,
       promptSchedule,
+      birthdayPrice, // 👈 NOVO
+      mediaLinks, // 👈 NOVO
     );
 
     return {

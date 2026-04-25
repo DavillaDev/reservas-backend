@@ -240,25 +240,29 @@ model WhatsappInstance {
 // 9. CONFIGURAÇÃO DA IA (GEMINI) - NOVO
 // =========================================================
 model AiAgent {
-  id              String    @id @default(uuid())
-  nightclubId     String    @unique
-  systemPrompt    String?   @db.Text // Passamos para opcional (?) para não dar conflito na transição
-  isActive        Boolean   @default(true) // Mantive o seu padrão original
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id              String   @id @default(uuid())
+  nightclubId     String   @unique
+  systemPrompt    String?  @db.Text
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   // 🛡️ NOVAS COLUNAS MODULARIZADAS
-  promptIdentity  String?   @db.Text // Tom de voz, endereço e postura
-  promptTable     String?   @db.Text // Regras exclusivas de Mesa
-  promptBirthday  String?   @db.Text // Regras exclusivas de Aniversário
-  promptEvents    String?   @db.Text // Eventos especiais e avisos
+  promptIdentity  String?  @db.Text
+  promptTable     String?  @db.Text
+  promptBirthday  String?  @db.Text
+  promptEvents    String?  @db.Text
   
-  // 📅 PROGRAMAÇÃO (A única exceção)
-  promptSchedule  Json?      // Aqui usamos Json porque a estrutura varia muito
+  // 📅 PROGRAMAÇÃO E PRECIFICAÇÃO
+  promptSchedule  Json?    // Estrutura de dias da semana (ex: { "mon": { active: true, text: "..." } })
+  birthdayPrice   Decimal? @default(0.0) // 👈 NOVO: Preço base da reserva de aniversário
+  
+  // 📸 MÍDIAS (FLYERS E VÍDEOS)
+  mediaLinks      Json?    // 👈 NOVO: Armazena as URLs do Cloudinary (ex: { "monFlyer": "url", "birthdayVideo": "url" })
 
   nightclub       Nightclub @relation(fields: [nightclubId], references: [id], onDelete: Cascade)
 
-  @@map("ai_agents") // 👈 O GRANDE SEGREDO: Isso garante que o Prisma não apague sua tabela!
+  @@map("ai_agents")
 }
 
 // =========================================================

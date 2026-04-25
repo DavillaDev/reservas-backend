@@ -113,6 +113,8 @@ export class AiService {
     promptBirthday?: string,
     promptEvents?: string,
     promptSchedule?: any,
+    birthdayPrice?: string | number, // 👈 NOVO
+    mediaLinks?: any, // 👈 NOVO
   ) {
     try {
       const nightclub = await this.prisma.nightclub.findUnique({
@@ -120,6 +122,25 @@ export class AiService {
       });
 
       if (!nightclub) throw new NotFoundException('Balada não encontrada.');
+
+      // 🛠️ Tratamento do preço (Converte "50,00" para número que o Prisma aceita)
+      let formattedPrice: number | undefined = undefined;
+      if (
+        birthdayPrice !== undefined &&
+        birthdayPrice !== null &&
+        birthdayPrice !== ''
+      ) {
+        if (typeof birthdayPrice === 'string') {
+          // Remove símbolos e troca vírgula por ponto
+          const cleanString = birthdayPrice
+            .replace('R$', '')
+            .replace(/\s/g, '')
+            .replace(',', '.');
+          formattedPrice = parseFloat(cleanString);
+        } else {
+          formattedPrice = Number(birthdayPrice);
+        }
+      }
 
       // O Upsert atualiza as colunas se o registro já existir, ou cria se for novo
       const agent = await this.prisma.aiAgent.upsert({
@@ -131,7 +152,9 @@ export class AiService {
           promptTable,
           promptBirthday,
           promptEvents,
-          promptSchedule: promptSchedule ? promptSchedule : undefined, // Garante segurança do JSON
+          promptSchedule: promptSchedule ? promptSchedule : undefined,
+          birthdayPrice: formattedPrice, // 👈 NOVO
+          mediaLinks: mediaLinks ? mediaLinks : undefined, // 👈 NOVO
         },
         create: {
           nightclubId,
@@ -142,6 +165,8 @@ export class AiService {
           promptBirthday,
           promptEvents,
           promptSchedule: promptSchedule ? promptSchedule : undefined,
+          birthdayPrice: formattedPrice, // 👈 NOVO
+          mediaLinks: mediaLinks ? mediaLinks : undefined, // 👈 NOVO
         },
       });
 

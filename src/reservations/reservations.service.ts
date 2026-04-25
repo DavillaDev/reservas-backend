@@ -24,16 +24,24 @@ export class ReservationsService {
   ) {}
 
   // ===========================================================================
-  // 1. CRIAR RESERVA (COM BLACKLIST E CRM 🔒)
+  // 1. CRIAR RESERVA (COM BLACKLIST, CRM E REGRA DE ANIVERSÁRIO 🔒🎂)
   // ===========================================================================
   async create(dto: CreateReservationDto) {
     const space = await this.prisma.space.findUnique({
       where: { id: dto.spaceId },
     });
 
+    // 🛡️ MODIFICADO: Incluímos o 'aiAgent' no select para poder pegar o 'birthdayPrice'
     const nightclub = await this.prisma.nightclub.findUnique({
       where: { id: dto.nightclubId },
-      select: { id: true, name: true, settings: true },
+      select: {
+        id: true,
+        name: true,
+        settings: true,
+        aiAgent: {
+          select: { birthdayPrice: true },
+        },
+      },
     });
 
     if (!space || !nightclub) {
@@ -58,7 +66,7 @@ export class ReservationsService {
       );
     }
 
-    // 🎂 Lógica de Aniversário
+    // 🎂 Lógica de Aniversário (Data do cliente)
     const birthdayDate = dto.birthdayDate
       ? new Date(dto.birthdayDate)
       : customer?.birthdayDate || null;
@@ -117,8 +125,20 @@ export class ReservationsService {
       throw new ConflictException('Este espaço já está reservado.');
     }
 
-    // --- LÓGICA DE PAGAMENTO ---
-    const price = Number(space.price || 0);
+    // ==========================================================
+    // 💰 LÓGICA DE PAGAMENTO BLINDADA (NOVA LÓGICA AQUI)
+    // ==========================================================
+    let price = Number(space.price || 0); // Preço base do camarote/mesa
+
+    // Se o cliente (via IA) informou que é aniversário, e o dono configurou um valor...
+    if (
+      dto.isBirthday &&
+      nightclub.aiAgent?.birthdayPrice !== null &&
+      nightclub.aiAgent?.birthdayPrice !== undefined
+    ) {
+      price = Number(nightclub.aiAgent.birthdayPrice); // Sobrescreve com o preço do aniversário
+    }
+
     const paymentActive = settings?.payment_active !== false;
     const requiresPayment = price > 0 && paymentActive;
 
@@ -140,7 +160,7 @@ export class ReservationsService {
         isBirthday: dto.isBirthday || false,
         birthdayDate: birthdayDate,
         status: initialStatus,
-        amount: price,
+        amount: price, // Envia o valor matematicamente validado para o banco
         paymentDeadline,
         validationToken,
       },
@@ -309,7 +329,7 @@ export class ReservationsService {
           `[CRON] 🧹 ${result.count} reservas expiradas foram canceladas com sucesso.`,
         );
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(
         `[CRON ERROR] Falha ao processar faxina de reservas:`,
         error.message,
