@@ -5,16 +5,16 @@ import {
   BadRequestException,
   InternalServerErrorException,
   Logger,
-} from '@nestjs/common';
-import { PrismaService } from '../../prisma/prisma.service';
-import { MailService } from '../mail/mail.service';
-import { ConfigService } from '@nestjs/config';
-import { NotificationsService } from '../notifications/notifications.service';
-import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
-import { addMinutes, addYears, isAfter } from 'date-fns';
-import { v4 as uuidv4 } from 'uuid';
-import { decrypt } from '../common/utils/encryption.util';
-import axios from 'axios';
+} from "@nestjs/common";
+import { PrismaService } from "../../prisma/prisma.service";
+import { MailService } from "../mail/mail.service";
+import { ConfigService } from "@nestjs/config";
+import { NotificationsService } from "../notifications/notifications.service";
+import { MercadoPagoConfig, Payment, Preference } from "mercadopago";
+import { addMinutes, addYears, isAfter } from "date-fns";
+import { v4 as uuidv4 } from "uuid";
+import { decrypt } from "../common/utils/encryption.util";
+import axios from "axios";
 
 @Injectable()
 export class PaymentsService {
@@ -51,7 +51,7 @@ export class PaymentsService {
         attempt++;
       }
     }
-    throw new Error('Falha inesperada no motor de retry.');
+    throw new Error("Falha inesperada no motor de retry.");
   }
 
   // ===========================================================================
@@ -63,13 +63,13 @@ export class PaymentsService {
       include: { nightclub: true, space: true },
     });
 
-    if (!reservation) throw new NotFoundException('Reserva não encontrada.');
+    if (!reservation) throw new NotFoundException("Reserva não encontrada.");
 
     if (
-      reservation.status === 'CONFIRMED' ||
-      reservation.status === 'CHECKED_IN'
+      reservation.status === "CONFIRMED" ||
+      reservation.status === "CHECKED_IN"
     ) {
-      return { status: 'PAID', reservation };
+      return { status: "PAID", reservation };
     }
 
     if (
@@ -78,13 +78,13 @@ export class PaymentsService {
     ) {
       await this.prisma.reservation.update({
         where: { id: id },
-        data: { status: 'CANCELED' },
+        data: { status: "CANCELED" },
       });
-      throw new ConflictException('O prazo para pagamento expirou.');
+      throw new ConflictException("O prazo para pagamento expirou.");
     }
 
     const pixData = await this.generatePix(id);
-    return { status: 'PENDING', reservation, pix: pixData };
+    return { status: "PENDING", reservation, pix: pixData };
   }
 
   // ===========================================================================
@@ -100,17 +100,17 @@ export class PaymentsService {
     });
 
     if (!reservation) {
-      throw new NotFoundException('Reserva não encontrada.');
+      throw new NotFoundException("Reserva não encontrada.");
     }
 
     // 🛡️ NOVO: Lendo os dados de dentro do JSON "settings"
     let nightclubSettings: any = {};
     if (reservation.nightclub.settings) {
-      if (typeof reservation.nightclub.settings === 'string') {
+      if (typeof reservation.nightclub.settings === "string") {
         try {
           nightclubSettings = JSON.parse(reservation.nightclub.settings);
         } catch (e) {
-          this.logger.error('Erro ao ler settings da balada:', e);
+          this.logger.error("Erro ao ler settings da balada:", e);
         }
       } else {
         nightclubSettings = reservation.nightclub.settings;
@@ -129,13 +129,13 @@ export class PaymentsService {
     // 🛡️ TRAVA DE SEGURANÇA: Se a balada não tem token, bloqueia a reserva
     if (!rawToken) {
       throw new BadRequestException(
-        'A balada ainda não configurou o Mercado Pago para receber pagamentos.',
+        "A balada ainda não configurou o Mercado Pago para receber pagamentos.",
       );
     }
 
-    let accessTokenParaUsar = '';
+    let accessTokenParaUsar = "";
     try {
-      accessTokenParaUsar = rawToken.includes(':')
+      accessTokenParaUsar = rawToken.includes(":")
         ? decrypt(rawToken)
         : rawToken;
     } catch (error) {
@@ -144,13 +144,13 @@ export class PaymentsService {
         error,
       );
       throw new InternalServerErrorException(
-        'Erro nas credenciais de pagamento da balada.',
+        "Erro nas credenciais de pagamento da balada.",
       );
     }
 
     if (!accessTokenParaUsar) {
       throw new InternalServerErrorException(
-        'Token do Mercado Pago da balada é inválido ou nulo.',
+        "Token do Mercado Pago da balada é inválido ou nulo.",
       );
     }
 
@@ -168,11 +168,11 @@ export class PaymentsService {
             payment.get({ id: reservation.paymentId as string }),
           );
 
-          if (existing.status === 'approved') {
-            return { status: 'PAID' };
+          if (existing.status === "approved") {
+            return { status: "PAID" };
           }
 
-          if (existing.status === 'pending') {
+          if (existing.status === "pending") {
             return {
               qrCodeBase64:
                 existing.point_of_interaction?.transaction_data?.qr_code_base64,
@@ -192,11 +192,11 @@ export class PaymentsService {
       const expiresAtDate = addMinutes(new Date(), 20);
       const amount = Number(reservation.amount || reservation.space.price || 0);
 
-      const rawEmail = reservation.customerEmail || '';
+      const rawEmail = reservation.customerEmail || "";
       const validEmail =
-        typeof rawEmail === 'string' &&
-        rawEmail.includes('@') &&
-        rawEmail.includes('.')
+        typeof rawEmail === "string" &&
+        rawEmail.includes("@") &&
+        rawEmail.includes(".")
           ? rawEmail.trim().toLowerCase()
           : `cliente.${reservation.id.substring(0, 8)}@reservasclub.com.br`;
 
@@ -205,12 +205,12 @@ export class PaymentsService {
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
-        payment_method_id: 'pix',
+        payment_method_id: "pix",
         payer: {
           email: validEmail,
-          first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
+          first_name: reservation.customerName?.split(" ")[0] || "Cliente",
         },
-        notification_url: `https://reservas-backend-fa4b.onrender.com/payments/webhook`,
+        notification_url: `https://reservas-backend-xi8j.onrender.com/payments/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
       };
@@ -227,10 +227,10 @@ export class PaymentsService {
         );
       } catch (mpError: any) {
         const errorData = mpError.response?.data || {};
-        const errorMsg = errorData.message || mpError.message || '';
+        const errorMsg = errorData.message || mpError.message || "";
 
         // Se der pau na taxa de aplicação (ex: dono tentando comprar na própria balada e o MP barrando)
-        if (errorMsg.includes('application_fee')) {
+        if (errorMsg.includes("application_fee")) {
           delete paymentBody.application_fee;
           response = await this.withRetry(() =>
             payment.create({ body: paymentBody }),
@@ -245,7 +245,7 @@ export class PaymentsService {
         data: {
           paymentId: response.id?.toString(),
           paymentDeadline: expiresAtDate,
-          status: 'PENDING',
+          status: "PENDING",
         },
       });
 
@@ -259,13 +259,13 @@ export class PaymentsService {
       };
     } catch (error: any) {
       if (error.status === 429) {
-        throw new BadRequestException('Muitas requisições. Aguarde.');
+        throw new BadRequestException("Muitas requisições. Aguarde.");
       }
       this.logger.error(
-        '❌ ERRO MERCADO PAGO:',
+        "❌ ERRO MERCADO PAGO:",
         error.response?.data || error.message,
       );
-      throw new BadRequestException('Erro ao processar pagamento.');
+      throw new BadRequestException("Erro ao processar pagamento.");
     }
   }
 
@@ -277,14 +277,14 @@ export class PaymentsService {
       where: { id: nightclubId },
     });
 
-    if (!nightclub) throw new NotFoundException('Balada não encontrada.');
+    if (!nightclub) throw new NotFoundException("Balada não encontrada.");
 
     const platformToken = this.configService.get<string>(
-      'MP_PLATFORM_ACCESS_TOKEN',
+      "MP_PLATFORM_ACCESS_TOKEN",
     );
     if (!platformToken)
       throw new InternalServerErrorException(
-        'MP_PLATFORM_ACCESS_TOKEN ausente.',
+        "MP_PLATFORM_ACCESS_TOKEN ausente.",
       );
 
     const client = new MercadoPagoConfig({ accessToken: platformToken });
@@ -296,27 +296,27 @@ export class PaymentsService {
           body: {
             items: [
               {
-                id: 'premium-plan-ia',
-                title: 'Plano Premium IA - ReservasClub',
+                id: "premium-plan-ia",
+                title: "Plano Premium IA - ReservasClub",
                 quantity: 1,
                 unit_price: 1900,
-                description: 'Automação de WhatsApp e IA para Reservas',
+                description: "Automação de WhatsApp e IA para Reservas",
               },
             ],
             external_reference: `PREMIUM_UPGRADE:${nightclubId}`,
-            notification_url: `https://reservas-backend-fa4b.onrender.com/payments/webhook`,
+            notification_url: `https://reservas-backend-xi8j.onrender.com/payments/webhook`,
             back_urls: {
-              success: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=success`,
-              failure: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=error`,
+              success: `${this.configService.get("FRONTEND_URL")}/dashboard/ai?status=success`,
+              failure: `${this.configService.get("FRONTEND_URL")}/dashboard/ai?status=error`,
             },
-            auto_return: 'approved',
+            auto_return: "approved",
             payment_methods: { installments: 12 },
           },
         }),
       );
       return { initPoint: response.init_point };
     } catch (error: any) {
-      throw new BadRequestException('Erro ao gerar link de pagamento.');
+      throw new BadRequestException("Erro ao gerar link de pagamento.");
     }
   }
 
@@ -325,7 +325,7 @@ export class PaymentsService {
   // ===========================================================================
   async processWebhook(paymentId: string) {
     const platformToken =
-      this.configService.get<string>('MP_PLATFORM_ACCESS_TOKEN') || '';
+      this.configService.get<string>("MP_PLATFORM_ACCESS_TOKEN") || "";
     const platformClient = new MercadoPagoConfig({
       accessToken: platformToken,
     });
@@ -335,15 +335,15 @@ export class PaymentsService {
       const paymentData: any = await this.withRetry(() =>
         payment.get({ id: paymentId }),
       );
-      if (paymentData.status !== 'approved') return;
+      if (paymentData.status !== "approved") return;
 
       const externalRef = paymentData.external_reference;
 
-      if (externalRef && externalRef.startsWith('PREMIUM_UPGRADE:')) {
-        const nightclubId = externalRef.split(':')[1];
+      if (externalRef && externalRef.startsWith("PREMIUM_UPGRADE:")) {
+        const nightclubId = externalRef.split(":")[1];
         await this.prisma.nightclub.update({
           where: { id: nightclubId },
-          data: { plan: 'PREMIUM', planExpiresAt: addYears(new Date(), 1) },
+          data: { plan: "PREMIUM", planExpiresAt: addYears(new Date(), 1) },
         });
         this.logger.log(`✨ [WEBHOOK] Balada ${nightclubId} agora é PREMIUM!`);
         return;
@@ -369,8 +369,8 @@ export class PaymentsService {
 
       // 🛡️ TRAVA DE DUPLICIDADE: Se já confirmou, ignora!
       if (
-        reservation.status === 'CONFIRMED' ||
-        reservation.status === 'CHECKED_IN'
+        reservation.status === "CONFIRMED" ||
+        reservation.status === "CHECKED_IN"
       ) {
         this.logger.log(
           `⚠️ [WEBHOOK] Ignorando notificação duplicada. Reserva ${reservation.id} já confirmada.`,
@@ -380,7 +380,7 @@ export class PaymentsService {
 
       await this.confirmReservation(reservation.id, paymentId);
     } catch (error: any) {
-      this.logger.error('❌ Erro no Webhook:', error.message);
+      this.logger.error("❌ Erro no Webhook:", error.message);
     }
   }
 
@@ -392,7 +392,7 @@ export class PaymentsService {
     const updated = await this.prisma.reservation.update({
       where: { id: reservationId },
       data: {
-        status: 'CONFIRMED',
+        status: "CONFIRMED",
         validationToken,
         paymentId: paymentId.toString(),
       },
@@ -405,7 +405,7 @@ export class PaymentsService {
     if (updated.customerEmail) {
       this.mailService
         .sendReservationConfirmation(updated as any, updated.nightclub.name)
-        .catch((err) => this.logger.error('Erro e-mail:', err.message));
+        .catch((err) => this.logger.error("Erro e-mail:", err.message));
     }
 
     // 2. Push Notification (Admin)
@@ -415,27 +415,27 @@ export class PaymentsService {
         customerName: updated.customerName,
         spaceName: updated.space.name,
       })
-      .catch((err) => this.logger.error('Erro Push:', err.message));
+      .catch((err) => this.logger.error("Erro Push:", err.message));
 
     // 3. 📲 WHATSAPP AUTOMÁTICO (O Ingresso QR Code pelo Link FrontEnd)
     this.dispararIngressoWhatsapp(updated).catch((err) =>
-      this.logger.error('❌ Erro no Ingresso WhatsApp:', err.message),
+      this.logger.error("❌ Erro no Ingresso WhatsApp:", err.message),
     );
   }
 
   private async dispararIngressoWhatsapp(reservation: any) {
     try {
       const serviceIaUrl =
-        this.configService.get('SERVICE_IA_URL') || 'http://localhost:10000';
-      const internalKey = this.configService.get('INTERNAL_SERVICE_KEY');
+        this.configService.get("SERVICE_IA_URL") || "http://localhost:10000";
+      const internalKey = this.configService.get("INTERNAL_SERVICE_KEY");
 
       const frontendUrl =
-        this.configService.get('FRONTEND_URL') || 'https://reservasclub.com.br';
+        this.configService.get("FRONTEND_URL") || "https://reservasclub.com.br";
       const checkoutLink = `${frontendUrl}/checkout/${reservation.id}`;
 
       const mensagem =
         `✅ *PAGAMENTO CONFIRMADO!*\n\n` +
-        `Fala *${reservation.customerName.split(' ')[0]}*! Sua reserva na *${reservation.nightclub.name.toUpperCase()}* está garantida.\n\n` +
+        `Fala *${reservation.customerName.split(" ")[0]}*! Sua reserva na *${reservation.nightclub.name.toUpperCase()}* está garantida.\n\n` +
         `📍 *Setor:* ${reservation.space.name}\n\n` +
         `🎫 *SEU INGRESSO DIGITAL ESTÁ AQUI:*\n` +
         `${checkoutLink}\n\n` +
@@ -451,7 +451,7 @@ export class PaymentsService {
             text: mensagem,
           },
           {
-            headers: { 'x-internal-key': internalKey },
+            headers: { "x-internal-key": internalKey },
             timeout: 5000,
           },
         ),
@@ -462,7 +462,7 @@ export class PaymentsService {
       );
     } catch (error: any) {
       this.logger.error(
-        'Falha ao disparar ingresso automático via WhatsApp:',
+        "Falha ao disparar ingresso automático via WhatsApp:",
         error.message,
       );
     }
