@@ -34,7 +34,7 @@ export class PaymentsController {
   @Post("generate-pix")
   @HttpCode(HttpStatus.OK)
   async generatePixForAI(
-    // 🛡️ Blindagem: Se a IA enviar um ID quebrado, o NestJS barra automaticamente
+    // 🛡️ : Se a IA enviar um ID quebrado, o NestJS barra automaticamente
     @Body("reservationId", new ParseUUIDPipe({ version: "4" }))
     reservationId: string,
     @Headers("x-internal-key") internalKey: string,
