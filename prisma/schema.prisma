@@ -177,6 +177,10 @@ model Reservation {
   nightclub Nightclub @relation(fields: [nightclubId], references: [id])
   space     Space     @relation(fields: [spaceId], references: [id])
 
+  // 💰 NOVO VÍNCULO: Promoter
+  promoterId        String?
+  promoter          User?     @relation("PromoterReservations", fields: [promoterId], references: [id])
+
   @@map("reservations")
 }
 
