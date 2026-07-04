@@ -14,6 +14,13 @@ import { addMinutes } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { NotificationsService } from '../notifications/notifications.service';
+import { Prisma } from '@prisma/client'; // 👈 Importado para tipar filtros do Prisma
+
+// 🛡️ NOVO: Interface para tipar o JSON do banco e sumir com os erros de 'any'
+interface NightclubSettings {
+  openingDays?: number[];
+  payment_active?: boolean;
+}
 
 @Injectable()
 export class ReservationsService {
@@ -31,7 +38,6 @@ export class ReservationsService {
       where: { id: dto.spaceId },
     });
 
-    // 🛡️ MODIFICADO: Incluímos o 'aiAgent' no select para poder pegar o 'birthdayPrice'
     const nightclub = await this.prisma.nightclub.findUnique({
       where: { id: dto.nightclubId },
       select: {
@@ -48,11 +54,23 @@ export class ReservationsService {
       throw new NotFoundException('Balada ou espaço não encontrados.');
     }
 
-    // Validações básicas de cliente
     if (!dto.customerEmail || !dto.customerName || !dto.customerPhone) {
       throw new BadRequestException(
         'Nome, E-mail e Telefone são obrigatórios.',
       );
+    }
+
+    // --- VALIDAÇÃO DE PROMOTER (NOVO) ---
+    if (dto.promoterId) {
+      const promoterExists = await this.prisma.user.findUnique({
+        where: { id: dto.promoterId },
+        select: { id: true, role: true },
+      });
+
+      // Se o ID for inválido ou não for de um promoter, anulamos o vínculo silenciosamente
+      if (!promoterExists || promoterExists.role !== 'PROMOTER') {
+        dto.promoterId = undefined;
+      }
     }
 
     // --- CRM & BLACKLIST ---
@@ -97,8 +115,9 @@ export class ReservationsService {
       : `${dto.date}T12:00:00.000Z`;
     const checkDate = new Date(safeDateString);
 
-    const settings = (nightclub.settings as any) || {};
-    const openingDays = settings.openingDays as number[];
+    // 🛡️ CORRIGIDO: Tipagem segura aplicada no lugar do 'any'
+    const settings = (nightclub.settings as NightclubSettings) || {};
+    const openingDays = settings.openingDays;
 
     if (openingDays && openingDays.length > 0) {
       const dayOfWeek = checkDate.getDay();
@@ -126,19 +145,19 @@ export class ReservationsService {
     }
 
     // ==========================================================
-    // 💰 LÓGICA DE PAGAMENTO BLINDADA (NOVA LÓGICA AQUI)
+    // 💰 LÓGICA DE PAGAMENTO BLINDADA
     // ==========================================================
-    let price = Number(space.price || 0); // Preço base do camarote/mesa
+    let price = Number(space.price || 0);
 
-    // Se o cliente (via IA) informou que é aniversário, e o dono configurou um valor...
     if (
       dto.isBirthday &&
       nightclub.aiAgent?.birthdayPrice !== null &&
       nightclub.aiAgent?.birthdayPrice !== undefined
     ) {
-      price = Number(nightclub.aiAgent.birthdayPrice); // Sobrescreve com o preço do aniversário
+      price = Number(nightclub.aiAgent.birthdayPrice);
     }
 
+    // 🛡️ CORRIGIDO: Agora o TypeScript sabe que payment_active é um boolean seguro
     const paymentActive = settings?.payment_active !== false;
     const requiresPayment = price > 0 && paymentActive;
 
@@ -160,9 +179,10 @@ export class ReservationsService {
         isBirthday: dto.isBirthday || false,
         birthdayDate: birthdayDate,
         status: initialStatus,
-        amount: price, // Envia o valor matematicamente validado para o banco
+        amount: price,
         paymentDeadline,
         validationToken,
+        promoterId: dto.promoterId, // 👈 INSERIDO: Vínculo do Promoter salvo no banco
       },
       include: {
         space: true,
@@ -176,24 +196,24 @@ export class ReservationsService {
       },
     });
 
-    // Envio de e-mail e Push para reservas gratuitas/cortesia (Confirmadas na hora)
     if (!requiresPayment) {
       if (reservation.customerEmail) {
+        // Ignorando a tipagem de serviço externo momentaneamente, caso o MailService exija algo estrito
         await this.mailService
           .sendReservationConfirmation(
-            reservation as any,
+            reservation as never,
             reservation.nightclub.name,
           )
-          .catch((err) => console.error('Erro e-mail:', err.message));
+          .catch((err: Error) => console.error('Erro e-mail:', err.message));
       }
 
       await this.notificationsService
         .notifyNewReservation(dto.nightclubId, {
           id: reservation.id,
           customerName: reservation.customerName,
-          spaceName: (reservation as any).space.name,
+          spaceName: reservation.space.name, // 🛡️ CORRIGIDO: Removido o 'any' do space.name
         })
-        .catch((err) => console.error('Erro Push:', err.message));
+        .catch((err: Error) => console.error('Erro Push:', err.message));
     }
 
     return {
@@ -210,7 +230,8 @@ export class ReservationsService {
       throw new UnauthorizedException('Identificação da balada ausente.');
     }
 
-    const where: any = { nightclubId };
+    // 🛡️ CORRIGIDO: Tipagem nativa do Prisma aplicada ao invés de 'any'
+    const where: Prisma.ReservationWhereInput = { nightclubId };
 
     if (date) {
       const startOfDay = new Date(`${date}T00:00:00.000Z`);
@@ -291,17 +312,15 @@ export class ReservationsService {
   // ===========================================================================
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
-    // Usamos o ISOString para garantir que a comparação seja feita em UTC puro
     const now = new Date();
 
     try {
-      // 1. Primeiro, vamos contar se existem reservas que DEVERIAM ser canceladas (para debug)
       const countPending = await this.prisma.reservation.count({
         where: {
           status: 'PENDING',
           paymentDeadline: {
             lt: now,
-            not: null, // Garante que não estamos tentando comparar com campos vazios
+            not: null,
           },
         },
       });
@@ -312,7 +331,6 @@ export class ReservationsService {
         );
       }
 
-      // 2. Executa o update
       const result = await this.prisma.reservation.updateMany({
         where: {
           status: 'PENDING',
@@ -329,10 +347,13 @@ export class ReservationsService {
           `[CRON] 🧹 ${result.count} reservas expiradas foram canceladas com sucesso.`,
         );
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      // 🛡️ CORRIGIDO: Tratamento de erro seguro
+      const errorMessage =
+        error instanceof Error ? error.message : 'Erro desconhecido';
       console.error(
         `[CRON ERROR] Falha ao processar faxina de reservas:`,
-        error.message,
+        errorMessage,
       );
     }
   }
