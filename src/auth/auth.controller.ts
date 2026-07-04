@@ -33,10 +33,10 @@ export class AuthController {
       email: string;
       password: string;
       nightclubId: string;
-      role: string;
+      role: 'STAFF' | 'MANAGER' | 'PROMOTER';
     },
   ) {
-    // 🛡️ CORRIGIDO: Tipagem explícita para eliminar todos os erros de 'any' do ESLint
+    // 🌟 CORRIGIDO: Agora o Controller sabe exatamente quais strings são permitidas e o TypeScript para de chorar!
     return this.authService.registerTeamMember({
       name: teamData.name,
       email: teamData.email,
