@@ -53,6 +53,7 @@ export class AuthService {
         role: user.role,
         nightclubId: user.nightclubId,
         nightclubName: user.nightclub?.name,
+        nightclubSlug: user.nightclub?.slug,
       },
     };
   }

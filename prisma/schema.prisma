@@ -76,6 +76,10 @@ model Nightclub {
   repassPixKeyType  String? 
   
   settings          Json?     
+  
+  // 💰 REGRAS DE COMISSÃO DE PROMOTERS
+  commissionType  CommissionType @default(FIXED)
+  commissionValue Decimal        @default(0.0)
 
   // 💰 GESTÃO DE PLANOS (NOVO)
   plan              NightclubPlan      @default(FREE)
@@ -180,6 +184,10 @@ model Reservation {
   // 💰 NOVO VÍNCULO: Promoter
   promoterId        String?
   promoter          User?     @relation("PromoterReservations", fields: [promoterId], references: [id])
+
+  // 💰 CONTROLE FINANCEIRO DO PROMOTER
+  commissionStatus CommissionStatus @default(PENDING)
+  commissionAmount Decimal?         @default(0.0)
 
   @@map("reservations")
 }
@@ -317,6 +325,18 @@ enum NightclubPlan {
   PREMIUM
 }
 
+enum CommissionType {
+  FIXED
+  PERCENTAGE
+}
+
+enum CommissionStatus {
+  PENDING    // Aguardando o cliente ir na balada
+  APPROVED   // Cliente foi, comissão liberada para pagamento
+  PAID       // Dono já fez o Pix pro promoter
+  CANCELED   // Cliente não foi (No-show) ou cancelou
+}
+
 // =========================================================
 // 10. MEMÓRIA DA IA (HISTÓRICO DE CONVERSAS PERSISTENTE) 🛰️
 // =========================================================
@@ -332,3 +352,4 @@ model AiMemory {
   @@index([nightclubId, customerPhone])
   @@map("ai_memory")
 }
+
