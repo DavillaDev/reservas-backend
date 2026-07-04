@@ -8,7 +8,7 @@ datasource db {
 }
 
 // =========================================================
-// 1. USUÁRIOS (QUEM LOGA NO SISTEMA: ADMIN/STAFF/MANAGER)
+// 1. USUÁRIOS (QUEM LOGA NO SISTEMA: ADMIN/STAFF/MANAGER/PROMOTER)
 // =========================================================
 model User {
   id                String             @id @default(uuid())
@@ -25,6 +25,9 @@ model User {
 
   // 🔔 NOVA RELAÇÃO: Dispositivos para notificações push
   pushSubscriptions PushSubscription[]
+
+  // 💰 NOVA RELAÇÃO: Reservas vinculadas a este Promoter
+  promotedReservations Reservation[]   @relation("PromoterReservations")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -274,6 +277,7 @@ enum UserRole {
   OWNER      
   MANAGER    // 👈 NOVO: Perfil de Gerente
   STAFF      
+  PROMOTER   // 👈 NOVO: Perfil de Promoter
 }
 
 enum SpaceType {
