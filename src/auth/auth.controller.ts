@@ -34,22 +34,32 @@ export class AuthController {
       password: string;
       nightclubId: string;
       role: 'STAFF' | 'MANAGER' | 'PROMOTER';
+      commissionType?: 'FIXED' | 'PERCENTAGE'; // 👈 NOVO: Recebe o tipo de comissão
+      commissionValue?: number; // 👈 NOVO: Recebe o valor da comissão
     },
   ) {
-    // 🌟 CORRIGIDO: Agora o Controller sabe exatamente quais strings são permitidas e o TypeScript para de chorar!
+    // 🌟 CORRIGIDO: Agora repassa as variáveis financeiras para o AuthService
     return this.authService.registerTeamMember({
       name: teamData.name,
       email: teamData.email,
       password: teamData.password,
       nightclubId: teamData.nightclubId,
       role: teamData.role,
+      commissionType: teamData.commissionType,
+      commissionValue: teamData.commissionValue,
     });
   }
 
-  // 🟢 NOVO: Rota para buscar a equipe da balada
+  // 🟢 NOVO: Rota para buscar a equipe da balada (Já com métricas financeiras)
   @Get('team/:nightclubId')
   getTeam(@Param('nightclubId') nightclubId: string) {
     return this.authService.getTeam(nightclubId);
+  }
+
+  // 💰 NOVO: Rota para o Dono dar baixa e liquidar as comissões pendentes via Pix
+  @Post('payout/:promoterId')
+  payPromoter(@Param('promoterId') promoterId: string) {
+    return this.authService.payPromoterCommissions(promoterId);
   }
 
   // 🔴 NOVO: Rota para deletar/revogar acesso de um membro

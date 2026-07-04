@@ -8,6 +8,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
+import { CommissionType } from '@prisma/client';
 
 @Injectable()
 export class AuthService {
@@ -16,26 +17,23 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  // Agora recebe email e senha separadamente para facilitar
+  // 🔐 Realiza o Login e injeta os metadados da balada na sessão
   async login(email: string, pass: string) {
-    // 1. Busca na tabela USER (A nova tabela de login)
     const user = await this.prisma.user.findUnique({
       where: { email },
-      include: { nightclub: true }, // Traz dados da balada junto
+      include: { nightclub: true },
     });
 
     if (!user) {
       throw new UnauthorizedException('Email ou senha inválidos');
     }
 
-    // 2. Verifica a senha usando BCrypt
     const isMatch = await bcrypt.compare(pass, user.password);
 
     if (!isMatch) {
       throw new UnauthorizedException('Email ou senha inválidos');
     }
 
-    // 3. Gera o Token (O Crachá VIP)
     const payload = {
       sub: user.id,
       email: user.email,
@@ -58,27 +56,26 @@ export class AuthService {
     };
   }
 
-  // 🛡️ MÉTODO ATUALIZADO: Criação de Membros da Equipe (Portaria, Gerente ou Promoter)
+  // 🛡️ Cadastra membros da equipe com suporte a comissões customizadas para Promoters
   async registerTeamMember(data: {
     name: string;
     email: string;
     password: string;
     nightclubId: string;
-    role: 'STAFF' | 'MANAGER' | 'PROMOTER'; // 👈 1. Liberado aqui na tipagem do TypeScript
+    role: 'STAFF' | 'MANAGER' | 'PROMOTER';
+    commissionType?: 'FIXED' | 'PERCENTAGE';
+    commissionValue?: number;
   }) {
-    // 0. Trava de Segurança Máxima: Impede criação de admins via API pública (Permite apenas Staff, Manager e Promoter)
     if (
       data.role !== 'STAFF' &&
       data.role !== 'MANAGER' &&
       data.role !== 'PROMOTER'
     ) {
-      // 👈 2. Liberado na validação do NestJS (Fim do Erro 400)
       throw new BadRequestException(
         'Nível de acesso inválido ou não autorizado.',
       );
     }
 
-    // 1. Verifica se o e-mail já está em uso para evitar duplicidade
     const userExists = await this.prisma.user.findUnique({
       where: { email: data.email },
     });
@@ -87,11 +84,10 @@ export class AuthService {
       throw new ConflictException('Este e-mail já está cadastrado no sistema.');
     }
 
-    // 2. Criptografa a senha para o banco de dados
     const salt = await bcrypt.genSalt();
     const hashedPassword = await bcrypt.hash(data.password, salt);
 
-    // 3. Salva no banco amarrado à balada com o nível de acesso correto
+    // Salva o usuário aplicando a regra de negócio financeira se for promoter
     const newUser = await this.prisma.user.create({
       data: {
         name: data.name,
@@ -99,10 +95,15 @@ export class AuthService {
         password: hashedPassword,
         role: data.role,
         nightclubId: data.nightclubId,
+        commissionType:
+          data.role === 'PROMOTER'
+            ? (data.commissionType as CommissionType)
+            : 'FIXED',
+        commissionValue:
+          data.role === 'PROMOTER' ? data.commissionValue || 0 : 0,
       },
     });
 
-    // 4. Retorna os dados do usuário limpos (sem a senha)
     return {
       id: newUser.id,
       name: newUser.name,
@@ -112,28 +113,88 @@ export class AuthService {
     };
   }
 
-  // 🛡️ NOVO: Buscar todos os membros da equipe de uma balada
+  // 📊 Central de Comando: Busca equipe agregando métricas operacionais e financeiras em tempo real
   async getTeam(nightclubId: string) {
-    return this.prisma.user.findMany({
+    const members = await this.prisma.user.findMany({
       where: {
         nightclubId: nightclubId,
-        role: {
-          in: ['MANAGER', 'STAFF', 'PROMOTER'], // 👈 3. Incluído aqui para aparecerem no seu Dashboard de equipe refatorado!
-        },
+        role: { in: ['MANAGER', 'STAFF', 'PROMOTER'] },
       },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
+      include: {
+        promotedReservations: true, // Puxa o histórico de indicações para fazermos a agregação
       },
       orderBy: {
         name: 'asc',
       },
     });
+
+    // Mapeia os dados transformando o retorno em um painel rico de auditoria
+    return members.map((user) => {
+      let totalVendas = 0;
+      let comissaoPendente = 0;
+      let totalBipados = 0;
+
+      if (user.role === 'PROMOTER') {
+        // Vendas totais: Conta todas as reservas feitas pelo link dele que NÃO foram canceladas
+        totalVendas = user.promotedReservations.filter(
+          (res) => res.status !== 'CANCELED',
+        ).length;
+
+        // Comissão Pendente: Soma apenas os valores de reservas já APROVADAS (ex: cliente compareceu) que ainda não foram pagas
+        comissaoPendente = user.promotedReservations
+          .filter((res) => res.commissionStatus === 'APPROVED')
+          .reduce((sum, res) => sum + Number(res.commissionAmount || 0), 0);
+      }
+
+      if (user.role === 'STAFF') {
+        // 💡 Como o banco não vincula qual staff bipou individualmente (apenas salva o status global da mesa),
+        // podemos deixar um contador zerado ou retornar o total da casa. Retornamos 0 por padrão para auditoria futura.
+        totalBipados = 0;
+      }
+
+      return {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        commissionType: user.commissionType,
+        commissionValue: Number(user.commissionValue),
+        totalVendas,
+        comissaoPendente,
+        totalBipados,
+      };
+    });
   }
 
-  // 🛡️ NOVO: Deletar um membro da equipe (Demitir)
+  // 💰 Sistema de Baixa: Quita as comissões prontas de um promoter específico
+  async payPromoterCommissions(promoterId: string) {
+    const promoter = await this.prisma.user.findUnique({
+      where: { id: promoterId },
+    });
+
+    if (!promoter || promoter.role !== 'PROMOTER') {
+      throw new BadRequestException('Usuário inválido ou não é um promoter.');
+    }
+
+    // Altera o status financeiro de APPROVED (Liberado) para PAID (Pago)
+    const updateResult = await this.prisma.reservation.updateMany({
+      where: {
+        promoterId: promoterId,
+        commissionStatus: 'APPROVED',
+      },
+      data: {
+        commissionStatus: 'PAID',
+      },
+    });
+
+    return {
+      success: true,
+      message: `Baixa realizada com sucesso para ${promoter.name}.`,
+      liquidatedReservations: updateResult.count,
+    };
+  }
+
+  // 🛡️ Remove um colaborador do sistema
   async deleteTeamMember(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
