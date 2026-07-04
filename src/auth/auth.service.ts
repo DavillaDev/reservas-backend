@@ -57,16 +57,21 @@ export class AuthService {
     };
   }
 
-  // 🛡️ MÉTODO ATUALIZADO: Criação de Membros da Equipe (Portaria ou Gerente)
+  // 🛡️ MÉTODO ATUALIZADO: Criação de Membros da Equipe (Portaria, Gerente ou Promoter)
   async registerTeamMember(data: {
     name: string;
     email: string;
     password: string;
     nightclubId: string;
-    role: 'STAFF' | 'MANAGER';
+    role: 'STAFF' | 'MANAGER' | 'PROMOTER'; // 👈 1. Liberado aqui na tipagem do TypeScript
   }) {
-    // 0. Trava de Segurança Máxima: Impede criação de admins via API pública
-    if (data.role !== 'STAFF' && data.role !== 'MANAGER') {
+    // 0. Trava de Segurança Máxima: Impede criação de admins via API pública (Permite apenas Staff, Manager e Promoter)
+    if (
+      data.role !== 'STAFF' &&
+      data.role !== 'MANAGER' &&
+      data.role !== 'PROMOTER'
+    ) {
+      // 👈 2. Liberado na validação do NestJS (Fim do Erro 400)
       throw new BadRequestException(
         'Nível de acesso inválido ou não autorizado.',
       );
@@ -112,7 +117,7 @@ export class AuthService {
       where: {
         nightclubId: nightclubId,
         role: {
-          in: ['MANAGER', 'STAFF'], // Oculta o dono (OWNER) da lista
+          in: ['MANAGER', 'STAFF', 'PROMOTER'], // 👈 3. Incluído aqui para aparecerem no seu Dashboard de equipe refatorado!
         },
       },
       select: {

@@ -19,13 +19,24 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @Post('login')
-  signIn(@Body() signInDto: Record<string, any>) {
+  signIn(@Body() signInDto: Record<string, string>) {
+    // 🛡️ CORRIGIDO: De 'any' para 'string'
     return this.authService.login(signInDto.email, signInDto.password);
   }
 
-  // 🛡️ Rota para o Admin criar usuários da equipe (STAFF ou MANAGER)
+  // 🛡️ Rota para o Admin criar usuários da equipe (STAFF, MANAGER ou PROMOTER)
   @Post('register-team')
-  registerTeamMember(@Body() teamData: Record<string, any>) {
+  registerTeamMember(
+    @Body()
+    teamData: {
+      name: string;
+      email: string;
+      password: string;
+      nightclubId: string;
+      role: string;
+    },
+  ) {
+    // 🛡️ CORRIGIDO: Tipagem explícita para eliminar todos os erros de 'any' do ESLint
     return this.authService.registerTeamMember({
       name: teamData.name,
       email: teamData.email,
