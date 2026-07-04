@@ -23,6 +23,10 @@ model User {
   nightclubId       String?
   nightclub         Nightclub?         @relation(fields: [nightclubId], references: [id])
 
+  // 💰 REGRAS DE COMISSÃO DO PROMOTER (NOVO - INDIVIDUAL)
+  commissionType    CommissionType     @default(FIXED)
+  commissionValue   Decimal            @default(0.0)
+
   // 🔔 NOVA RELAÇÃO: Dispositivos para notificações push
   pushSubscriptions PushSubscription[]
 
@@ -77,10 +81,6 @@ model Nightclub {
   
   settings          Json?     
   
-  // 💰 REGRAS DE COMISSÃO DE PROMOTERS
-  commissionType  CommissionType @default(FIXED)
-  commissionValue Decimal        @default(0.0)
-
   // 💰 GESTÃO DE PLANOS (NOVO)
   plan              NightclubPlan      @default(FREE)
   planExpiresAt     DateTime?
@@ -352,4 +352,3 @@ model AiMemory {
   @@index([nightclubId, customerPhone])
   @@map("ai_memory")
 }
-
