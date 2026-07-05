@@ -210,7 +210,7 @@ export class PaymentsService {
           email: validEmail,
           first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
         },
-        notification_url: `https://reservas-backend-u66t.onrender.com/payments/webhook`,
+        notification_url: `${this.configService.get('BACKEND_URL')}/payments/webhook`, // Corrigido para variável de ambiente!
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
       };
@@ -304,7 +304,7 @@ export class PaymentsService {
               },
             ],
             external_reference: `PREMIUM_UPGRADE:${nightclubId}`,
-            notification_url: `https://reservas-backend-u66t.onrender.com/payments/webhook`,
+            notification_url: `${this.configService.get('BACKEND_URL')}/payments/webhook`, // Corrigido para variável de ambiente!
             back_urls: {
               success: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=success`,
               failure: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=error`,
@@ -385,30 +385,71 @@ export class PaymentsService {
   }
 
   // ===========================================================================
-  // 5. CONFIRMAÇÃO FINAL (E-MAIL + PUSH + WHATSAPP 🚀)
+  // 5. CONFIRMAÇÃO FINAL (E-MAIL + PUSH + WHATSAPP E AGORA COMISSÃO 🚀)
   // ===========================================================================
   private async confirmReservation(reservationId: string, paymentId: string) {
     const validationToken = uuidv4();
+
+    // 1. Busca a reserva com os dados do Promoter para calcular a comissão
+    const existingRes = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: { promoter: true },
+    });
+
+    let commissionData = {};
+
+    // 2. 💰 LÓGICA DE COMISSIONAMENTO
+    if (existingRes?.promoterId && existingRes.promoter) {
+      const promoter = existingRes.promoter;
+      const resAmount = Number(existingRes.amount || 0);
+      let calcCommission = 0;
+
+      // Só processa comissão se o valor da reserva for maior que 0
+      if (resAmount > 0) {
+        if (promoter.commissionType === 'FIXED') {
+          calcCommission = Number(promoter.commissionValue || 0);
+        } else if (promoter.commissionType === 'PERCENTAGE') {
+          calcCommission =
+            (resAmount * Number(promoter.commissionValue || 0)) / 100;
+        }
+
+        commissionData = {
+          commissionAmount: calcCommission,
+          commissionStatus: 'APPROVED', // Já libera para o dono pagar!
+        };
+
+        this.logger.log(
+          `💰 [COMISSÃO] Calculada: R$ ${calcCommission} para o promoter ${promoter.name}`,
+        );
+      } else {
+        this.logger.log(
+          `ℹ️ [COMISSÃO] Ignorada (Reserva Gratuita) para o promoter ${promoter.name}`,
+        );
+      }
+    }
+
+    // 3. Atualiza a Reserva com Status Paga + Comissão
     const updated = await this.prisma.reservation.update({
       where: { id: reservationId },
       data: {
         status: 'CONFIRMED',
         validationToken,
         paymentId: paymentId.toString(),
+        ...commissionData, // 👈 Injeta os dados da comissão no banco!
       },
       include: { space: true, nightclub: true },
     });
 
     this.logger.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada.`);
 
-    // 1. E-mail
+    // 4. E-mail
     if (updated.customerEmail) {
       this.mailService
         .sendReservationConfirmation(updated as any, updated.nightclub.name)
         .catch((err) => this.logger.error('Erro e-mail:', err.message));
     }
 
-    // 2. Push Notification (Admin)
+    // 5. Push Notification (Admin)
     this.notificationsService
       .notifyNewReservation(updated.nightclubId, {
         id: updated.id,
@@ -417,7 +458,7 @@ export class PaymentsService {
       })
       .catch((err) => this.logger.error('Erro Push:', err.message));
 
-    // 3. 📲 WHATSAPP AUTOMÁTICO (O Ingresso QR Code pelo Link FrontEnd)
+    // 6. 📲 WHATSAPP AUTOMÁTICO (O Ingresso QR Code pelo Link FrontEnd)
     this.dispararIngressoWhatsapp(updated).catch((err) =>
       this.logger.error('❌ Erro no Ingresso WhatsApp:', err.message),
     );

@@ -225,18 +225,22 @@ export class ReservationsService {
   // ===========================================================================
   // 2. LISTAR TODAS (Dashboard & Filtros - BLINDADO 🛡️)
   // ===========================================================================
-  async findAll(date?: string, nightclubId?: string) {
+  async findAll(date?: string, nightclubId?: string, promoterId?: string) {
     if (!nightclubId) {
       throw new UnauthorizedException('Identificação da balada ausente.');
     }
 
-    // 🛡️ CORRIGIDO: Tipagem nativa do Prisma aplicada ao invés de 'any'
     const where: Prisma.ReservationWhereInput = { nightclubId };
 
     if (date) {
       const startOfDay = new Date(`${date}T00:00:00.000Z`);
       const endOfDay = new Date(`${date}T23:59:59.999Z`);
       where.date = { gte: startOfDay, lte: endOfDay };
+    }
+
+    // 🛡️ NOVO: Se vier o ID do Promoter, a API blinda e devolve SÓ as reservas dele
+    if (promoterId) {
+      where.promoterId = promoterId;
     }
 
     return this.prisma.reservation.findMany({
