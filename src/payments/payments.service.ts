@@ -210,7 +210,7 @@ export class PaymentsService {
           email: validEmail,
           first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
         },
-        notification_url: `https://reservas-backend-xi8j.onrender.com/payments/webhook`,
+        notification_url: `https://reservas-backend-u66t.onrender.com/payments/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
       };
@@ -304,7 +304,7 @@ export class PaymentsService {
               },
             ],
             external_reference: `PREMIUM_UPGRADE:${nightclubId}`,
-            notification_url: `https://reservas-backend-xi8j.onrender.com/payments/webhook`,
+            notification_url: `https://reservas-backend-u66t.onrender.com/payments/webhook`,
             back_urls: {
               success: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=success`,
               failure: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=error`,
