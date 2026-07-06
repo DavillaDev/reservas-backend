@@ -14,9 +14,8 @@ import { addMinutes } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { NotificationsService } from '../notifications/notifications.service';
-import { Prisma } from '@prisma/client'; // 👈 Importado para tipar filtros do Prisma
+import { Prisma } from '@prisma/client';
 
-// 🛡️ NOVO: Interface para tipar o JSON do banco e sumir com os erros de 'any'
 interface NightclubSettings {
   openingDays?: number[];
   payment_active?: boolean;
@@ -60,14 +59,13 @@ export class ReservationsService {
       );
     }
 
-    // --- VALIDAÇÃO DE PROMOTER (NOVO) ---
+    // --- VALIDAÇÃO DE PROMOTER ---
     if (dto.promoterId) {
       const promoterExists = await this.prisma.user.findUnique({
         where: { id: dto.promoterId },
         select: { id: true, role: true },
       });
 
-      // Se o ID for inválido ou não for de um promoter, anulamos o vínculo silenciosamente
       if (!promoterExists || promoterExists.role !== 'PROMOTER') {
         dto.promoterId = undefined;
       }
@@ -84,7 +82,6 @@ export class ReservationsService {
       );
     }
 
-    // 🎂 Lógica de Aniversário (Data do cliente)
     const birthdayDate = dto.birthdayDate
       ? new Date(dto.birthdayDate)
       : customer?.birthdayDate || null;
@@ -109,13 +106,12 @@ export class ReservationsService {
       });
     }
 
-    // --- VALIDAÇÃO DE DATA E DIAS DE FUNCIONAMENTO ---
+    // --- VALIDAÇÃO DE DATA ---
     const safeDateString = dto.date.includes('T')
       ? dto.date
       : `${dto.date}T12:00:00.000Z`;
     const checkDate = new Date(safeDateString);
 
-    // 🛡️ CORRIGIDO: Tipagem segura aplicada no lugar do 'any'
     const settings = (nightclub.settings as NightclubSettings) || {};
     const openingDays = settings.openingDays;
 
@@ -145,7 +141,7 @@ export class ReservationsService {
     }
 
     // ==========================================================
-    // 💰 LÓGICA DE PAGAMENTO BLINDADA
+    // 💰 LÓGICA DE PREÇO E CRIAÇÃO
     // ==========================================================
     let price = Number(space.price || 0);
 
@@ -157,7 +153,6 @@ export class ReservationsService {
       price = Number(nightclub.aiAgent.birthdayPrice);
     }
 
-    // 🛡️ CORRIGIDO: Agora o TypeScript sabe que payment_active é um boolean seguro
     const paymentActive = settings?.payment_active !== false;
     const requiresPayment = price > 0 && paymentActive;
 
@@ -182,7 +177,12 @@ export class ReservationsService {
         amount: price,
         paymentDeadline,
         validationToken,
-        promoterId: dto.promoterId, // 👈 INSERIDO: Vínculo do Promoter salvo no banco
+        promoterId: dto.promoterId,
+        // 💰 NOVO: Se a reserva for gratuita e veio de link, já deixa como APPROVED com R$ 0 de comissão.
+        // Isso garante que ela suba instantaneamente para o painel do promoter de forma organizada!
+        commissionAmount: !requiresPayment && dto.promoterId ? 0.0 : 0.0,
+        commissionStatus:
+          !requiresPayment && dto.promoterId ? 'APPROVED' : 'PENDING',
       },
       include: {
         space: true,
@@ -198,7 +198,6 @@ export class ReservationsService {
 
     if (!requiresPayment) {
       if (reservation.customerEmail) {
-        // Ignorando a tipagem de serviço externo momentaneamente, caso o MailService exija algo estrito
         await this.mailService
           .sendReservationConfirmation(
             reservation as never,
@@ -211,7 +210,7 @@ export class ReservationsService {
         .notifyNewReservation(dto.nightclubId, {
           id: reservation.id,
           customerName: reservation.customerName,
-          spaceName: reservation.space.name, // 🛡️ CORRIGIDO: Removido o 'any' do space.name
+          spaceName: reservation.space.name,
         })
         .catch((err: Error) => console.error('Erro Push:', err.message));
     }
@@ -238,7 +237,7 @@ export class ReservationsService {
       where.date = { gte: startOfDay, lte: endOfDay };
     }
 
-    // 🛡️ NOVO: Se vier o ID do Promoter, a API blinda e devolve SÓ as reservas dele
+    // 🛡️ Filtro do painel do promoter
     if (promoterId) {
       where.promoterId = promoterId;
     }
@@ -352,7 +351,6 @@ export class ReservationsService {
         );
       }
     } catch (error: unknown) {
-      // 🛡️ CORRIGIDO: Tratamento de erro seguro
       const errorMessage =
         error instanceof Error ? error.message : 'Erro desconhecido';
       console.error(
