@@ -17,6 +17,16 @@ import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
+// 🛡️ NOVO: Interface para ensinar ao TypeScript o que vem dentro do req.user
+// Isso elimina todos os erros de "Unsafe member access" do ESLint
+interface AuthRequest {
+  user: {
+    id: string;
+    nightclubId: string;
+    role: string;
+  };
+}
+
 @Controller('reservations')
 export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
@@ -47,13 +57,13 @@ export class ReservationsController {
   @Get()
   async findAll(
     @Query('date') date: string,
-    @Query('promoterId') promoterId: string, // 👈 1. Agora ele captura o ID que o front envia!
-    @Request() req: any,
+    @Query('promoterId') promoterId: string, // 👈 Captura o ID do promoter vindo do Frontend
+    @Request() req: AuthRequest, // 👈 Tipagem forte aplicada aqui
   ) {
-    // 🛡️ Segurança: Ignoramos o nightclubId vindo da query e usamos o do TOKEN
+    // 🛡️ Segurança: Ignoramos qualquer ID de balada vindo da query e usamos o do TOKEN
     const nightclubId = req.user.nightclubId;
 
-    // 👈 2. Repassamos o promoterId como 3º argumento para o Service filtrar
+    // Repassa o promoterId para o Service filtrar as reservas corretamente
     return this.reservationsService.findAll(date, nightclubId, promoterId);
   }
 
@@ -72,7 +82,7 @@ export class ReservationsController {
 
   @UseGuards(JwtAuthGuard)
   @Get(':id')
-  async findOne(@Param('id') id: string, @Request() req: any) {
+  async findOne(@Param('id') id: string, @Request() req: AuthRequest) {
     const res = await this.reservationsService.findOne(id);
 
     if (!res) throw new NotFoundException('Reserva não encontrada.');
@@ -88,7 +98,7 @@ export class ReservationsController {
   async update(
     @Param('id') id: string,
     @Body() updateReservationDto: UpdateReservationDto,
-    @Request() req: any,
+    @Request() req: AuthRequest,
   ) {
     const res = await this.reservationsService.findOne(id);
 
@@ -104,7 +114,7 @@ export class ReservationsController {
 
   @UseGuards(JwtAuthGuard)
   @Delete(':id')
-  async remove(@Param('id') id: string, @Request() req: any) {
+  async remove(@Param('id') id: string, @Request() req: AuthRequest) {
     const res = await this.reservationsService.findOne(id);
 
     if (!res) throw new NotFoundException('Reserva não encontrada.');
