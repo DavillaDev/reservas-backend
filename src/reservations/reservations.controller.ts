@@ -41,14 +41,20 @@ export class ReservationsController {
   }
 
   // ===========================================================================
-  // 2. PRIVADO: Listar Reservas (Dashboard Admin)
+  // 2. PRIVADO: Listar Reservas (Dashboard Admin e Promoter)
   // ===========================================================================
   @UseGuards(JwtAuthGuard)
   @Get()
-  async findAll(@Query('date') date: string, @Request() req: any) {
-    // 🛡️ Segurança: Ignoramos qualquer ID vindo da query e usamos o do TOKEN
+  async findAll(
+    @Query('date') date: string,
+    @Query('promoterId') promoterId: string, // 👈 1. Agora ele captura o ID que o front envia!
+    @Request() req: any,
+  ) {
+    // 🛡️ Segurança: Ignoramos o nightclubId vindo da query e usamos o do TOKEN
     const nightclubId = req.user.nightclubId;
-    return this.reservationsService.findAll(date, nightclubId);
+
+    // 👈 2. Repassamos o promoterId como 3º argumento para o Service filtrar
+    return this.reservationsService.findAll(date, nightclubId, promoterId);
   }
 
   // ===========================================================================
