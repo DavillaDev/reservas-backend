@@ -117,16 +117,17 @@ export class PaymentsService {
       }
     }
 
-    // 🎯 Puxa a taxa do settings (se não tiver, puxa da raiz da tabela, se não 5%)
     const rawAppFee =
       nightclubSettings.appFeePercent || reservation.nightclub.appFeePercent;
     const percentage = rawAppFee ? Number(rawAppFee) / 100 : 0.05;
 
-    // 🎯 Puxa o token criptografado do settings ou da raiz da tabela
     const rawToken =
       nightclubSettings.mpAccessToken || reservation.nightclub.mpAccessToken;
 
-    // 🛡️ TRAVA DE SEGURANÇA: Se a balada não tem token, bloqueia a reserva
+    this.logger.warn(
+      `[DEBUG ESTOURO] 1. Token bruto encontrado? ${!!rawToken}`,
+    );
+
     if (!rawToken) {
       throw new BadRequestException(
         'A balada ainda não configurou o Mercado Pago para receber pagamentos.',
@@ -138,9 +139,13 @@ export class PaymentsService {
       accessTokenParaUsar = rawToken.includes(':')
         ? decrypt(rawToken)
         : rawToken;
+
+      this.logger.warn(
+        `[DEBUG ESTOURO] 2. Token descriptografado (Primeiros 10 chars): ${accessTokenParaUsar.substring(0, 10)}...`,
+      );
     } catch (error) {
       this.logger.error(
-        `Erro ao descriptografar token da balada ${reservation.nightclubId}`,
+        `[DEBUG ESTOURO] ERRO AO DESCRIPTOGRAFAR TOKEN:`,
         error,
       );
       throw new InternalServerErrorException(
@@ -202,6 +207,12 @@ export class PaymentsService {
 
       const myFee = Number((amount * percentage).toFixed(2));
 
+      // DEBUG DA VARIAVEL DE AMBIENTE
+      const envBackendUrl = this.configService.get('BACKEND_URL');
+      this.logger.warn(
+        `[DEBUG ESTOURO] 3. Variavel BACKEND_URL lida pelo Nest: "${envBackendUrl}"`,
+      );
+
       const paymentBody: any = {
         transaction_amount: amount,
         description: `Reserva: ${reservation.nightclub.name} - ${reservation.space.name}`,
@@ -210,15 +221,18 @@ export class PaymentsService {
           email: validEmail,
           first_name: reservation.customerName?.split(' ')[0] || 'Cliente',
         },
-        notification_url: `${this.configService.get('BACKEND_URL')}/payments/webhook`, // Corrigido para variável de ambiente!
+        notification_url: `${envBackendUrl}/payments/webhook`,
         date_of_expiration: expiresAtDate.toISOString(),
         external_reference: reservation.id,
       };
 
-      // Só aplica a taxa da plataforma se for um valor razoável (> 2 reais para cobrir tarifas mínimas se houver)
       if (amount > 2) {
         paymentBody.application_fee = myFee;
       }
+
+      this.logger.warn(
+        `[DEBUG ESTOURO] 4. Payload Completo enviando pro MP: ${JSON.stringify(paymentBody, null, 2)}`,
+      );
 
       let response: any;
       try {
@@ -229,7 +243,10 @@ export class PaymentsService {
         const errorData = mpError.response?.data || {};
         const errorMsg = errorData.message || mpError.message || '';
 
-        // Se der pau na taxa de aplicação (ex: dono tentando comprar na própria balada e o MP barrando)
+        this.logger.warn(
+          `[DEBUG ESTOURO] 5. Falha no payload: ${JSON.stringify(errorData)}`,
+        );
+
         if (errorMsg.includes('application_fee')) {
           delete paymentBody.application_fee;
           response = await this.withRetry(() =>
@@ -304,7 +321,7 @@ export class PaymentsService {
               },
             ],
             external_reference: `PREMIUM_UPGRADE:${nightclubId}`,
-            notification_url: `${this.configService.get('BACKEND_URL')}/payments/webhook`, // Corrigido para variável de ambiente!
+            notification_url: `${this.configService.get('BACKEND_URL')}/payments/webhook`,
             back_urls: {
               success: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=success`,
               failure: `${this.configService.get('FRONTEND_URL')}/dashboard/ai?status=error`,
@@ -349,7 +366,6 @@ export class PaymentsService {
         return;
       }
 
-      // 🛡️ Busca usando a referência ou o ID para ser à prova de falhas
       const reservation = await this.prisma.reservation.findFirst({
         where: {
           OR: [
@@ -367,7 +383,6 @@ export class PaymentsService {
         return;
       }
 
-      // 🛡️ TRAVA DE DUPLICIDADE: Se já confirmou, ignora!
       if (
         reservation.status === 'CONFIRMED' ||
         reservation.status === 'CHECKED_IN'
@@ -385,12 +400,11 @@ export class PaymentsService {
   }
 
   // ===========================================================================
-  // 5. CONFIRMAÇÃO FINAL (E-MAIL + PUSH + WHATSAPP E AGORA COMISSÃO 🚀)
+  // 5. CONFIRMAÇÃO FINAL
   // ===========================================================================
   private async confirmReservation(reservationId: string, paymentId: string) {
     const validationToken = uuidv4();
 
-    // 1. Busca a reserva com os dados do Promoter para calcular a comissão
     const existingRes = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
       include: { promoter: true },
@@ -398,13 +412,11 @@ export class PaymentsService {
 
     let commissionData = {};
 
-    // 2. 💰 LÓGICA DE COMISSIONAMENTO
     if (existingRes?.promoterId && existingRes.promoter) {
       const promoter = existingRes.promoter;
       const resAmount = Number(existingRes.amount || 0);
       let calcCommission = 0;
 
-      // Só processa comissão se o valor da reserva for maior que 0
       if (resAmount > 0) {
         if (promoter.commissionType === 'FIXED') {
           calcCommission = Number(promoter.commissionValue || 0);
@@ -415,7 +427,7 @@ export class PaymentsService {
 
         commissionData = {
           commissionAmount: calcCommission,
-          commissionStatus: 'APPROVED', // Já libera para o dono pagar!
+          commissionStatus: 'APPROVED',
         };
 
         this.logger.log(
@@ -428,28 +440,25 @@ export class PaymentsService {
       }
     }
 
-    // 3. Atualiza a Reserva com Status Paga + Comissão
     const updated = await this.prisma.reservation.update({
       where: { id: reservationId },
       data: {
         status: 'CONFIRMED',
         validationToken,
         paymentId: paymentId.toString(),
-        ...commissionData, // 👈 Injeta os dados da comissão no banco!
+        ...commissionData,
       },
       include: { space: true, nightclub: true },
     });
 
     this.logger.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada.`);
 
-    // 4. E-mail
     if (updated.customerEmail) {
       this.mailService
         .sendReservationConfirmation(updated as any, updated.nightclub.name)
         .catch((err) => this.logger.error('Erro e-mail:', err.message));
     }
 
-    // 5. Push Notification (Admin)
     this.notificationsService
       .notifyNewReservation(updated.nightclubId, {
         id: updated.id,
@@ -458,7 +467,6 @@ export class PaymentsService {
       })
       .catch((err) => this.logger.error('Erro Push:', err.message));
 
-    // 6. 📲 WHATSAPP AUTOMÁTICO (O Ingresso QR Code pelo Link FrontEnd)
     this.dispararIngressoWhatsapp(updated).catch((err) =>
       this.logger.error('❌ Erro no Ingresso WhatsApp:', err.message),
     );
@@ -482,7 +490,6 @@ export class PaymentsService {
         `${checkoutLink}\n\n` +
         `Acesse o link acima para abrir seu QR Code de entrada. Apresente na portaria e boa festa! 🥂`;
 
-      // 🛡️ Envio de mensagem com retry
       await this.withRetry(() =>
         axios.post(
           `${serviceIaUrl}/whatsapp/send-message`,
