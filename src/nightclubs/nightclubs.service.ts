@@ -45,7 +45,7 @@ export class NightclubsService {
         themeColor: themeColor || '#6366f1',
         logoUrl,
         mapUrl,
-        plan: 'FREE', // 👈 Garante o início no plano gratuito
+        plan: 'FREE',
       },
     });
   }
@@ -70,7 +70,7 @@ export class NightclubsService {
       where: { id },
       include: {
         spaces: { orderBy: { name: 'asc' } },
-        aiAgent: true, // 👈 Incluído para o frontend saber se a IA está configurada
+        aiAgent: true,
         whatsappInstances: {
           take: 1,
           orderBy: { createdAt: 'desc' },
@@ -152,7 +152,10 @@ export class NightclubsService {
       scopes: 'read,write,offline_access,payments',
     });
 
-    return `${MP_OAUTH_BASE_URL}?${params.toString()}`;
+    const finalUrl = `${MP_OAUTH_BASE_URL}?${params.toString()}`;
+    console.log(`⚙️ [OAUTH - SERVICE] URL de destino montada: ${finalUrl}`);
+
+    return finalUrl;
   }
 
   // ===========================================================================
@@ -169,6 +172,14 @@ export class NightclubsService {
       );
     }
 
+    console.log(
+      `\n⚙️ [OAUTH - PASSO 3] Fazendo POST para o Mercado Pago trocar o code pelo access_token...`,
+    );
+    console.log(`   - URL Alvo: ${MP_TOKEN_URL}`);
+    console.log(
+      `   - Payload: { client_id: "${clientId}", grant_type: "authorization_code", redirect_uri: "${redirectUri}", code: "${code.substring(0, 5)}..." }`,
+    );
+
     try {
       const tokenResponse = await axios.post<MpTokenResponse>(MP_TOKEN_URL, {
         client_id: clientId,
@@ -181,6 +192,17 @@ export class NightclubsService {
       const { access_token, user_id, public_key, refresh_token } =
         tokenResponse.data;
 
+      console.log(
+        `\n✅ [OAUTH - PASSO 4] Sucesso na requisição! O MP devolveu os dados:`,
+      );
+      console.log(`   - MP user_id: ${user_id}`);
+      console.log(
+        `   - access_token: Recebido com ${access_token?.length || 0} caracteres`,
+      );
+      console.log(
+        `   - refresh_token: ${refresh_token ? 'Recebido' : 'NÃO Recebido'}`,
+      );
+
       const nightclub = await this.prisma.nightclub.findUnique({
         where: { id: nightclubId },
         select: { settings: true },
@@ -192,6 +214,10 @@ export class NightclubsService {
         typeof nightclub.settings === 'object'
           ? (nightclub.settings as any)
           : {};
+
+      console.log(
+        `💾 [OAUTH - DB] Atualizando banco de dados com tokens criptografados...`,
+      );
 
       const updatedSettings = {
         ...currentSettings,
@@ -209,10 +235,17 @@ export class NightclubsService {
       });
 
       console.log(
-        `✅ [SECURITY] Tokens criptografados e salvos para a balada: ${nightclubId}`,
+        `✅ [OAUTH - DB] Tokens criptografados e salvos para a balada ID: ${nightclubId}`,
       );
     } catch (error: any) {
-      console.error('❌ ERRO OAUTH MP:', error.response?.data || error.message);
+      console.error(
+        '\n❌ [OAUTH - ERRO PASSO 3] O Mercado Pago rejeitou a troca do código!',
+      );
+      console.error(`   - Status HTTP: ${error.response?.status}`);
+      console.error(
+        `   - Resposta do MP:`,
+        error.response?.data || error.message,
+      );
       throw new BadRequestException(
         'Erro na conexão com Mercado Pago. Tente novamente.',
       );

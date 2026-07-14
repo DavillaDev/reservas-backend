@@ -54,7 +54,6 @@ export class NightclubsController {
     const event = body.event;
     const instanceName = body.instance;
 
-    // A Evolution manda o status dentro de data.state (open, close, connecting)
     if (event === 'connection.update') {
       const status = body.data?.state || body.data?.status;
       if (status) {
@@ -69,10 +68,7 @@ export class NightclubsController {
       console.log(
         `[Evolution Webhook] Novo QR Code gerado para: ${instanceName}`,
       );
-      // Futuramente podemos emitir via WebSocket aqui para a tela atualizar na hora
     }
-
-    // Responder 200 rápido para a Evolution não tentar reenviar
     return { received: true };
   }
 
@@ -97,37 +93,73 @@ export class NightclubsController {
   }
 
   // ===========================================================================
-  // 3. MERCADO PAGO OAUTH CALLBACK (PÚBLICO)
+  // 3. MERCADO PAGO OAUTH INÍCIO E CALLBACK
   // ===========================================================================
+
+  @Get('connect/:id')
+  async startMpConnect(@Param('id') nightclubId: string, @Res() res: any) {
+    console.log(
+      `\n🔗 [OAUTH - PASSO 1] Botão de conectar clicado no Frontend.`,
+    );
+    console.log(`🔗 [OAUTH - PASSO 1] ID da Balada recebido: ${nightclubId}`);
+
+    try {
+      const redirectUrl =
+        await this.nightclubsService.generateMpConnectUrl(nightclubId);
+      console.log(
+        `🔗 [OAUTH - PASSO 1] URL de autorização do Mercado Pago montada com sucesso:`,
+      );
+      console.log(
+        `🔗 [OAUTH - PASSO 1] Redirecionando usuário para -> ${redirectUrl}\n`,
+      );
+      return res.redirect(redirectUrl);
+    } catch (error) {
+      console.error(
+        '❌ [OAUTH - ERRO PASSO 1] Erro ao gerar URL:',
+        error.message,
+      );
+      return res.redirect(
+        `${FRONTEND_URL}/admin/settings?status=error&message=mp_url_failed`,
+      );
+    }
+  }
+
   @Get('oauth/callback')
   async handleMpCallback(
     @Query('code') code: string,
     @Query('state') nightclubId: string,
     @Res() res: any,
   ) {
+    console.log(
+      `\n📥 [OAUTH - PASSO 2] O Mercado Pago devolveu o usuário para o nosso Callback!`,
+    );
+    console.log(`📥 [OAUTH - PASSO 2] Parâmetros extraídos da URL:`);
+    console.log(
+      `   - param "code" (Autorização): ${code ? code.substring(0, 10) + '...' : 'AUSENTE!'}`,
+    );
+    console.log(`   - param "state" (Nightclub ID): ${nightclubId}`);
+
     try {
-      if (!code || !nightclubId) throw new Error('Dados ausentes');
+      if (!code || !nightclubId)
+        throw new Error(
+          'Dados ausentes no callback (code ou state não vieram na URL)',
+        );
+
       await this.nightclubsService.handleMpCallback(code, nightclubId);
+
+      console.log(
+        `✅ [OAUTH - PASSO 5] Fluxo concluído no backend! Redirecionando para o frontend com sucesso.\n`,
+      );
       return res.redirect(
         `${FRONTEND_URL}/admin/settings?status=success&mp=connected`,
       );
     } catch (error) {
-      console.error('Erro no callback MP:', error.message);
+      console.error(
+        '❌ [OAUTH - ERRO FINAL] Erro no callback MP:',
+        error.message,
+      );
       return res.redirect(
         `${FRONTEND_URL}/admin/settings?status=error&message=connection_failed`,
-      );
-    }
-  }
-
-  @Get('connect/:id')
-  async startMpConnect(@Param('id') nightclubId: string, @Res() res: any) {
-    try {
-      const redirectUrl =
-        await this.nightclubsService.generateMpConnectUrl(nightclubId);
-      return res.redirect(redirectUrl);
-    } catch (error) {
-      return res.redirect(
-        `${FRONTEND_URL}/admin/settings?status=error&message=mp_url_failed`,
       );
     }
   }
