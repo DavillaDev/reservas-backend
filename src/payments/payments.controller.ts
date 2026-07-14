@@ -9,23 +9,27 @@ import {
   HttpStatus,
   Headers,
   UnauthorizedException,
-  ParseUUIDPipe, // 👈 O "Segurança de Porta" nativo do NestJS
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { PaymentsService } from './payments.service';
+import { CheckoutService } from './services/checkout.service';
+import { WebhookService } from './services/webhook.service';
 
 @Controller('payments')
 export class PaymentsController {
-  constructor(private readonly paymentsService: PaymentsService) {}
+  // 🔌 Injetando os novos serviços separados!
+  constructor(
+    private readonly checkoutService: CheckoutService,
+    private readonly webhookService: WebhookService,
+  ) {}
 
   // ===========================================================================
   // 1. ROTA DE CHECKOUT (Chamada pelo Frontend para Reservas)
   // ===========================================================================
   @Get('checkout/:id')
   async getCheckoutData(
-    // 🛡️ Blindagem: Só aceita acessar o checkout se for um UUID válido
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ) {
-    return this.paymentsService.getCheckoutData(id);
+    return this.checkoutService.getCheckoutData(id);
   }
 
   // ===========================================================================
@@ -34,7 +38,6 @@ export class PaymentsController {
   @Post('generate-pix')
   @HttpCode(HttpStatus.OK)
   async generatePixForAI(
-    // 🛡️  Se a IA enviar um ID quebrado, o NestJS barra automaticamente
     @Body('reservationId', new ParseUUIDPipe({ version: '4' }))
     reservationId: string,
     @Headers('x-internal-key') internalKey: string,
@@ -45,7 +48,7 @@ export class PaymentsController {
       throw new UnauthorizedException('Chave de serviço inválida.');
     }
 
-    return this.paymentsService.generatePix(reservationId);
+    return this.checkoutService.generatePix(reservationId);
   }
 
   // ===========================================================================
@@ -54,11 +57,10 @@ export class PaymentsController {
   @Post('upgrade')
   @HttpCode(HttpStatus.OK)
   async createPremiumUpgrade(
-    // 🛡️ Blindagem: O ID da balada também precisa ser UUID
     @Body('nightclubId', new ParseUUIDPipe({ version: '4' }))
     nightclubId: string,
   ) {
-    return this.paymentsService.createPremiumPreference(nightclubId);
+    return this.checkoutService.createPremiumPreference(nightclubId);
   }
 
   // ===========================================================================
@@ -70,8 +72,8 @@ export class PaymentsController {
     const paymentId = body?.data?.id || query?.['data.id'] || query?.id;
 
     if (paymentId) {
-      // 🛡️ Executa em background (sem await) para liberar o Mercado Pago rapidamente
-      this.paymentsService.processWebhook(paymentId.toString()).catch((err) => {
+      // 🛡️ Manda o WebhookService processar em background
+      this.webhookService.processWebhook(paymentId.toString()).catch((err) => {
         console.error(
           '❌ Erro no processamento assíncrono do Webhook:',
           err.message,
