@@ -241,7 +241,7 @@ export class PaymentsService {
       }
 
       // =================================================================
-      // 🛑 DEBUG AGRESSIVO 2: PAYLOAD
+      // 🛑 DEBUG AGRESSIVO 2: PAYLOAD & FALLBACK MASTER
       // =================================================================
       this.logger.warn(
         `[RAIO-X 7] Payload enviado ao MP: ${JSON.stringify(paymentBody)}`,
@@ -249,19 +249,58 @@ export class PaymentsService {
 
       let response: any;
       try {
+        // Tenta gerar na conta da balada COM A TAXA (application_fee) presente
         response = await this.withRetry(() =>
           payment.create({ body: paymentBody }),
         );
       } catch (mpError: any) {
         const errorData = mpError.response?.data || {};
         const errorMsg = errorData.message || mpError.message || '';
+        const statusCode =
+          mpError.status || mpError.response?.status || errorData.status;
 
         this.logger.error(
           `[RAIO-X 8] O MERCADO PAGO REJEITOU O PAYLOAD. Retorno do MP: ${JSON.stringify(errorData)}`,
         );
 
-        if (errorMsg.includes('application_fee')) {
-          this.logger.warn(`[RAIO-X 9] Tentando sem application_fee...`);
+        // 🛡️ FALLBACK 1: TOKEN INVÁLIDO/REVOGADO (Usa o da Plataforma)
+        if (errorMsg.includes('invalid access token') || statusCode === 401) {
+          this.logger.warn(
+            `[FALLBACK ATIVADO] Token da balada falhou. Assumindo com MP_PLATFORM_ACCESS_TOKEN...`,
+          );
+
+          const platformToken = this.configService.get<string>(
+            'MP_PLATFORM_ACCESS_TOKEN',
+          );
+          if (!platformToken) {
+            throw new InternalServerErrorException(
+              'Token da plataforma não encontrado no .env.',
+            );
+          }
+
+          const fallbackClient = new MercadoPagoConfig({
+            accessToken: platformToken,
+          });
+          const fallbackPayment = new Payment(fallbackClient);
+
+          // O dinheiro cai na conta Master, então TEMOS que remover a taxa
+          this.logger.warn(
+            `[FALLBACK] Removendo application_fee para não bugar o pagamento na própria conta.`,
+          );
+          delete paymentBody.application_fee;
+
+          response = await this.withRetry(() =>
+            fallbackPayment.create({ body: paymentBody }),
+          );
+          this.logger.warn(
+            `[FALLBACK SUCESSO] Pix gerado usando a conta da plataforma!`,
+          );
+        }
+        // 🛡️ FALLBACK 2: ERRO APENAS NA TAXA (Tenta a conta da balada de novo, mas sem taxa)
+        else if (errorMsg.includes('application_fee')) {
+          this.logger.warn(
+            `[RAIO-X 9] Tentando sem application_fee na conta da balada...`,
+          );
           delete paymentBody.application_fee;
           response = await this.withRetry(() =>
             payment.create({ body: paymentBody }),
