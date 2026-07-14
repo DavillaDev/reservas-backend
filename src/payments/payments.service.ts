@@ -116,30 +116,57 @@ export class PaymentsService {
       }
     }
 
-    // 🛡️ CORREÇÃO: Prioriza os dados da raiz da tabela antes do JSON
     const rawAppFee =
       reservation.nightclub.appFeePercent || nightclubSettings.appFeePercent;
     const percentage = rawAppFee ? Number(rawAppFee) / 100 : 0.05;
 
-    const rawToken =
-      reservation.nightclub.mpAccessToken || nightclubSettings.mpAccessToken;
+    // =================================================================
+    // 🛑 DEBUG AGRESSIVO 1: ORIGEM DO TOKEN
+    // =================================================================
+    const tokenRaiz = reservation.nightclub.mpAccessToken;
+    const tokenSettings = nightclubSettings.mpAccessToken;
+
+    this.logger.warn(`[RAIO-X 1] Token na Raiz do BD existe? ${!!tokenRaiz}`);
+    this.logger.warn(
+      `[RAIO-X 2] Token no JSON Settings existe? ${!!tokenSettings}`,
+    );
+
+    const rawToken = tokenRaiz || tokenSettings;
 
     if (!rawToken || typeof rawToken !== 'string') {
       throw new BadRequestException(
-        'A balada ainda não configurou o Mercado Pago para receber pagamentos.',
+        'A balada ainda não configurou o Mercado Pago.',
       );
     }
 
+    this.logger.warn(
+      `[RAIO-X 3] Tamanho exato do Token Bruto capturado: ${rawToken.length} caracteres.`,
+    );
+
     let accessTokenParaUsar = '';
     try {
-      // 🛡️ CORREÇÃO: Mata espaços em branco e quebras de linha invisíveis
       const tokenLimpo = rawToken.trim();
 
-      accessTokenParaUsar = tokenLimpo.includes(':')
-        ? decrypt(tokenLimpo).trim() // Limpa novamente após descriptografar
-        : tokenLimpo;
+      if (tokenLimpo.includes(':')) {
+        this.logger.warn(
+          `[RAIO-X 4] Token possui ':', iniciando DESCRIPTOGRAFIA...`,
+        );
+        const tokenDescriptografado = decrypt(tokenLimpo);
+        accessTokenParaUsar = tokenDescriptografado.trim();
+      } else {
+        this.logger.warn(`[RAIO-X 4] Token NÃO possui ':', usando token puro.`);
+        accessTokenParaUsar = tokenLimpo;
+      }
+
+      // Validação de segurança para não imprimir o token inteiro no log, mas ver se ele está são
+      this.logger.warn(
+        `[RAIO-X 5] Token Final Para Uso - Tamanho: ${accessTokenParaUsar.length} caracteres.`,
+      );
+      this.logger.warn(
+        `[RAIO-X 6] Começa com: "${accessTokenParaUsar.substring(0, 15)}" | Termina com: "${accessTokenParaUsar.slice(-5)}"`,
+      );
     } catch (error) {
-      this.logger.error('Erro ao descriptografar token:', error);
+      this.logger.error('[RAIO-X ERRO FATAL] Falha ao descriptografar:', error);
       throw new InternalServerErrorException(
         'Erro nas credenciais de pagamento da balada.',
       );
@@ -147,7 +174,7 @@ export class PaymentsService {
 
     if (!accessTokenParaUsar) {
       throw new InternalServerErrorException(
-        'Token do Mercado Pago da balada é inválido ou nulo.',
+        'Token do Mercado Pago resultou vazio.',
       );
     }
 
@@ -164,11 +191,7 @@ export class PaymentsService {
           const existing: any = await this.withRetry(() =>
             payment.get({ id: reservation.paymentId as string }),
           );
-
-          if (existing.status === 'approved') {
-            return { status: 'PAID' };
-          }
-
+          if (existing.status === 'approved') return { status: 'PAID' };
           if (existing.status === 'pending') {
             return {
               qrCodeBase64:
@@ -181,7 +204,7 @@ export class PaymentsService {
           }
         } catch (e) {
           this.logger.warn(
-            `Erro ao recuperar pagamento existente ${reservation.paymentId}`,
+            `Erro ao recuperar pagamento ${reservation.paymentId}`,
           );
         }
       }
@@ -217,6 +240,13 @@ export class PaymentsService {
         paymentBody.application_fee = myFee;
       }
 
+      // =================================================================
+      // 🛑 DEBUG AGRESSIVO 2: PAYLOAD
+      // =================================================================
+      this.logger.warn(
+        `[RAIO-X 7] Payload enviado ao MP: ${JSON.stringify(paymentBody)}`,
+      );
+
       let response: any;
       try {
         response = await this.withRetry(() =>
@@ -226,7 +256,12 @@ export class PaymentsService {
         const errorData = mpError.response?.data || {};
         const errorMsg = errorData.message || mpError.message || '';
 
+        this.logger.error(
+          `[RAIO-X 8] O MERCADO PAGO REJEITOU O PAYLOAD. Retorno do MP: ${JSON.stringify(errorData)}`,
+        );
+
         if (errorMsg.includes('application_fee')) {
+          this.logger.warn(`[RAIO-X 9] Tentando sem application_fee...`);
           delete paymentBody.application_fee;
           response = await this.withRetry(() =>
             payment.create({ body: paymentBody }),
@@ -254,11 +289,10 @@ export class PaymentsService {
         expiresAt: expiresAtDate,
       };
     } catch (error: any) {
-      if (error.status === 429) {
+      if (error.status === 429)
         throw new BadRequestException('Muitas requisições. Aguarde.');
-      }
       this.logger.error(
-        '❌ ERRO MERCADO PAGO:',
+        '❌ ERRO MERCADO PAGO COMPLETO:',
         error.response?.data || error.message,
       );
       throw new BadRequestException('Erro ao processar pagamento.');
