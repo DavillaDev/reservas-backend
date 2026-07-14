@@ -19,7 +19,12 @@ export class MercadoPagoProvider {
       try {
         return await operation();
       } catch (error: any) {
-        if (error.status >= 400 && error.status < 500 && error.status !== 429) {
+        // 🛑 A MÁGICA ESTÁ AQUI: Capturamos o status real do erro do SDK do Mercado Pago
+        const statusCode =
+          error.status || error.response?.status || error.api_response?.status;
+
+        // Se for um erro 4xx (como 401 Token Inválido), aborta IMEDIATAMENTE. Não adianta tentar de novo!
+        if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
           throw error;
         }
 
