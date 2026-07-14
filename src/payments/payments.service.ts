@@ -103,7 +103,6 @@ export class PaymentsService {
       throw new NotFoundException('Reserva não encontrada.');
     }
 
-    // 🛡️ NOVO: Lendo os dados de dentro do JSON "settings"
     let nightclubSettings: any = {};
     if (reservation.nightclub.settings) {
       if (typeof reservation.nightclub.settings === 'string') {
@@ -117,18 +116,15 @@ export class PaymentsService {
       }
     }
 
+    // 🛡️ CORREÇÃO: Prioriza os dados da raiz da tabela antes do JSON
     const rawAppFee =
-      nightclubSettings.appFeePercent || reservation.nightclub.appFeePercent;
+      reservation.nightclub.appFeePercent || nightclubSettings.appFeePercent;
     const percentage = rawAppFee ? Number(rawAppFee) / 100 : 0.05;
 
     const rawToken =
-      nightclubSettings.mpAccessToken || reservation.nightclub.mpAccessToken;
+      reservation.nightclub.mpAccessToken || nightclubSettings.mpAccessToken;
 
-    this.logger.warn(
-      `[DEBUG ESTOURO] 1. Token bruto encontrado? ${!!rawToken}`,
-    );
-
-    if (!rawToken) {
+    if (!rawToken || typeof rawToken !== 'string') {
       throw new BadRequestException(
         'A balada ainda não configurou o Mercado Pago para receber pagamentos.',
       );
@@ -136,18 +132,14 @@ export class PaymentsService {
 
     let accessTokenParaUsar = '';
     try {
-      accessTokenParaUsar = rawToken.includes(':')
-        ? decrypt(rawToken)
-        : rawToken;
+      // 🛡️ CORREÇÃO: Mata espaços em branco e quebras de linha invisíveis
+      const tokenLimpo = rawToken.trim();
 
-      this.logger.warn(
-        `[DEBUG ESTOURO] 2. Token descriptografado (Primeiros 10 chars): ${accessTokenParaUsar.substring(0, 10)}...`,
-      );
+      accessTokenParaUsar = tokenLimpo.includes(':')
+        ? decrypt(tokenLimpo).trim() // Limpa novamente após descriptografar
+        : tokenLimpo;
     } catch (error) {
-      this.logger.error(
-        `[DEBUG ESTOURO] ERRO AO DESCRIPTOGRAFAR TOKEN:`,
-        error,
-      );
+      this.logger.error('Erro ao descriptografar token:', error);
       throw new InternalServerErrorException(
         'Erro nas credenciais de pagamento da balada.',
       );
@@ -189,7 +181,7 @@ export class PaymentsService {
           }
         } catch (e) {
           this.logger.warn(
-            `[MP_RECOVERY_WARN] Erro ao recuperar ${reservation.paymentId}`,
+            `Erro ao recuperar pagamento existente ${reservation.paymentId}`,
           );
         }
       }
@@ -206,12 +198,7 @@ export class PaymentsService {
           : `cliente.${reservation.id.substring(0, 8)}@reservasclub.com.br`;
 
       const myFee = Number((amount * percentage).toFixed(2));
-
-      // DEBUG DA VARIAVEL DE AMBIENTE
       const envBackendUrl = this.configService.get('BACKEND_URL');
-      this.logger.warn(
-        `[DEBUG ESTOURO] 3. Variavel BACKEND_URL lida pelo Nest: "${envBackendUrl}"`,
-      );
 
       const paymentBody: any = {
         transaction_amount: amount,
@@ -230,10 +217,6 @@ export class PaymentsService {
         paymentBody.application_fee = myFee;
       }
 
-      this.logger.warn(
-        `[DEBUG ESTOURO] 4. Payload Completo enviando pro MP: ${JSON.stringify(paymentBody, null, 2)}`,
-      );
-
       let response: any;
       try {
         response = await this.withRetry(() =>
@@ -242,10 +225,6 @@ export class PaymentsService {
       } catch (mpError: any) {
         const errorData = mpError.response?.data || {};
         const errorMsg = errorData.message || mpError.message || '';
-
-        this.logger.warn(
-          `[DEBUG ESTOURO] 5. Falha no payload: ${JSON.stringify(errorData)}`,
-        );
 
         if (errorMsg.includes('application_fee')) {
           delete paymentBody.application_fee;
