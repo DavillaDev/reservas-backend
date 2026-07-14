@@ -9,7 +9,7 @@ import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
 export class MercadoPagoProvider {
   private readonly logger = new Logger(MercadoPagoProvider.name);
 
-  // 🛡️ MOTOR DE RESILIÊNCIA ISOLADO
+  // 🛡️ MOTOR DE RESILIÊNCIA ISOLADO E BLINDADO
   public async withRetry<T>(
     operation: () => Promise<T>,
     maxRetries = 3,
@@ -19,12 +19,21 @@ export class MercadoPagoProvider {
       try {
         return await operation();
       } catch (error: any) {
-        // 🛑 A MÁGICA ESTÁ AQUI: Capturamos o status real do erro do SDK do Mercado Pago
+        // Pega a mensagem de erro em texto, porque o SDK às vezes esconde o status numérico
+        const errorMsg = (
+          error.response?.data?.message ||
+          error.message ||
+          ''
+        ).toLowerCase();
         const statusCode =
           error.status || error.response?.status || error.api_response?.status;
 
-        // Se for um erro 4xx (como 401 Token Inválido), aborta IMEDIATAMENTE. Não adianta tentar de novo!
-        if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
+        // 🛑 A MÁGICA ATUALIZADA: Se for 4xx OU tiver a palavra mágica de token inválido, aborta na hora!
+        if (
+          (statusCode >= 400 && statusCode < 500 && statusCode !== 429) ||
+          errorMsg.includes('invalid access token') ||
+          errorMsg.includes('unauthorized')
+        ) {
           throw error;
         }
 
