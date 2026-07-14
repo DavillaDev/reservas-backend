@@ -118,11 +118,41 @@ export class CheckoutService {
       new Date(reservation.paymentDeadline) > new Date()
     ) {
       try {
-        const existing: any = await this.mercadoPagoProvider.getPaymentStatus(
-          accessTokenParaUsar,
-          reservation.paymentId,
-        );
+        let existing: any;
+        try {
+          // Tenta ler com o token da balada
+          existing = await this.mercadoPagoProvider.getPaymentStatus(
+            accessTokenParaUsar,
+            reservation.paymentId,
+          );
+        } catch (statusError: any) {
+          const errorMsg =
+            statusError.response?.data?.message || statusError.message || '';
+          const statusCode =
+            statusError.status ||
+            statusError.response?.status ||
+            statusError.response?.data?.status;
 
+          // 🛡️ FALLBACK DE LEITURA: Se o token da balada for inválido, tenta ler na conta Master
+          if (errorMsg.includes('invalid access token') || statusCode === 401) {
+            const platformToken = this.configService.get<string>(
+              'MP_PLATFORM_ACCESS_TOKEN',
+            );
+            if (!platformToken) throw statusError;
+
+            this.logger.warn(
+              `[FALLBACK STATUS] Token da balada falhou. Lendo status do PIX na conta Master...`,
+            );
+            existing = await this.mercadoPagoProvider.getPaymentStatus(
+              platformToken,
+              reservation.paymentId,
+            );
+          } else {
+            throw statusError; // Se for outro erro, explode
+          }
+        }
+
+        // Se conseguiu ler (seja na balada ou no Master), devolve o PIX existente!
         if (existing.status === 'approved') return { status: 'PAID' };
         if (existing.status === 'pending') {
           return {
