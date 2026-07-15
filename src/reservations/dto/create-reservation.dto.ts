@@ -35,9 +35,11 @@ export class CreateReservationDto {
   @IsBoolean()
   isBirthday?: boolean; // Checkbox "É aniversário?"
 
+  // 🛡️ Mantemos como opcional no DTO, pois a validação de obrigatoriedade
+  // (+18) agora acontece dinamicamente lá no reservations.service.ts!
   @IsOptional()
   @IsString()
-  birthdayDate?: string; // Data de nascimento (para validar regra)
+  birthdayDate?: string;
 
   @IsOptional()
   @IsString()

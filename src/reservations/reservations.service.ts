@@ -16,9 +16,11 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Prisma } from '@prisma/client';
 
+// 🛡️ NOVO: Adicionado require_age_restriction na interface
 interface NightclubSettings {
   openingDays?: number[];
   payment_active?: boolean;
+  require_age_restriction?: boolean; 
 }
 
 @Injectable()
@@ -30,7 +32,7 @@ export class ReservationsService {
   ) {}
 
   // ===========================================================================
-  // 1. CRIAR RESERVA (COM BLACKLIST, CRM E REGRA DE ANIVERSÁRIO 🔒🎂)
+  // 1. CRIAR RESERVA (COM BLACKLIST, CRM E REGRA DE ANIVERSÁRIO 🔒🎂 E IDADE)
   // ===========================================================================
   async create(dto: CreateReservationDto) {
     const space = await this.prisma.space.findUnique({
@@ -86,6 +88,34 @@ export class ReservationsService {
       ? new Date(dto.birthdayDate)
       : customer?.birthdayDate || null;
 
+    // 🛡️ =====================================================================
+    // 🚦 VALIDAÇÃO DE IDADE (+18) BLINDADA NO BACKEND
+    // =========================================================================
+    const settings = (nightclub.settings as NightclubSettings) || {};
+    
+    if (settings.require_age_restriction) {
+      // 1. Exige que a data de nascimento seja fornecida
+      if (!birthdayDate) {
+        throw new BadRequestException('A data de nascimento é obrigatória para este estabelecimento.');
+      }
+
+      // 2. Calcula a idade exata
+      const today = new Date();
+      let age = today.getFullYear() - birthdayDate.getFullYear();
+      const m = today.getMonth() - birthdayDate.getMonth();
+
+      // Ajusta caso o aniversário ainda não tenha ocorrido este ano
+      if (m < 0 || (m === 0 && today.getDate() < birthdayDate.getDate())) {
+        age--;
+      }
+
+      // 3. Bloqueia se for menor de 18
+      if (age < 18) {
+        throw new BadRequestException('Apenas maiores de 18 anos podem realizar reservas.');
+      }
+    }
+    // =========================================================================
+
     if (!customer) {
       customer = await this.prisma.customer.create({
         data: {
@@ -112,7 +142,6 @@ export class ReservationsService {
       : `${dto.date}T12:00:00.000Z`;
     const checkDate = new Date(safeDateString);
 
-    const settings = (nightclub.settings as NightclubSettings) || {};
     const openingDays = settings.openingDays;
 
     if (openingDays && openingDays.length > 0) {
