@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
-
 import {
   Injectable,
   InternalServerErrorException,
@@ -12,6 +10,7 @@ import axios from 'axios';
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
+
   private readonly serviceIaUrl =
     process.env.SERVICE_IA_URL || 'http://localhost:3001';
 
@@ -36,7 +35,8 @@ export class AiService {
       const errorData = error.response?.data || {};
       const errorString = JSON.stringify(errorData).toLowerCase();
 
-      // 🛡️ BLINDAGEM: Se o erro indicar que a instância já existe
+      // 🛡️ BLINDAGEM:
+      // Se o erro indicar que a instância já existe
       if (
         error.response?.status === 409 ||
         errorString.includes('already exists') ||
@@ -47,6 +47,8 @@ export class AiService {
         );
 
         try {
+          // 🔄 ROTA DE FUGA:
+          // Em vez de criar, apenas pede para conectar
           const fallbackResponse = await axios.get(
             `${this.serviceIaUrl}/instances/connect/${nightclubId}`,
           );
@@ -57,6 +59,7 @@ export class AiService {
             '❌ Erro no Fallback de reconexão:',
             fallbackError.response?.data || fallbackError.message,
           );
+
           throw new InternalServerErrorException(
             'Falha ao resgatar o QR Code da instância existente.',
           );
@@ -67,6 +70,7 @@ export class AiService {
         '❌ Erro ao solicitar criação de instância:',
         errorData || error.message,
       );
+
       throw new InternalServerErrorException(
         'Não foi possível comunicar com o servidor de IA/WhatsApp.',
       );
@@ -78,32 +82,108 @@ export class AiService {
   // ===========================================================================
   async requestWhatsappCode(nightclubId: string, number: string) {
     try {
-      const targetUrl = `${this.serviceIaUrl}/instances/connect-code`;
-
       this.logger.log(
         `🔢 Tentando solicitar Código de Pareamento para a balada: ${nightclubId}, número: ${number}`,
       );
 
-      // 🕵️ O DEDO-DURO
-      this.logger.log(`🎯 [DEDO-DURO] Atirando para a URL -> ${targetUrl}`);
+      const url = `${this.serviceIaUrl}/instances/connect-code`;
 
-      const response = await axios.post(targetUrl, { nightclubId, number });
+      this.logger.log(`➡️ SERVICE IA URL: ${this.serviceIaUrl}`);
+      this.logger.log(`➡️ URL chamada: ${url}`);
+
+      const response = await axios.post(url, {
+        nightclubId,
+        number,
+      });
+
+      this.logger.log(
+        `✅ Código de pareamento solicitado com sucesso para: ${nightclubId}`,
+      );
 
       return response.data;
     } catch (error: any) {
+      /*
+       * DEBUG TEMPORÁRIO
+       *
+       * Aqui queremos descobrir quem está devolvendo o
+       * "Too Many Requests".
+       */
+
+      console.log('');
+      console.log('==============================================');
+      console.log('🚨 DEBUG - ERRO CONNECT CODE');
+      console.log('==============================================');
+
+      console.log('SERVICE IA URL:');
+      console.log(this.serviceIaUrl);
+
+      console.log('');
+      console.log('URL CHAMADA:');
+      console.log(`${this.serviceIaUrl}/instances/connect-code`);
+
+      console.log('');
+      console.log('NIGHTCLUB ID:');
+      console.log(nightclubId);
+
+      console.log('');
+      console.log('NÚMERO ENVIADO:');
+      console.log(number);
+
+      console.log('');
+      console.log('STATUS HTTP:');
+      console.log(error.response?.status);
+
+      console.log('');
+      console.log('STATUS TEXT:');
+      console.log(error.response?.statusText);
+
+      console.log('');
+      console.log('DATA DA RESPOSTA:');
+      console.dir(error.response?.data, {
+        depth: null,
+      });
+
+      console.log('');
+      console.log('HEADERS DA RESPOSTA:');
+      console.dir(error.response?.headers, {
+        depth: null,
+      });
+
+      console.log('');
+      console.log('HEADERS DA REQUISIÇÃO:');
+      console.dir(error.config?.headers, {
+        depth: null,
+      });
+
+      console.log('');
+      console.log('MÉTODO:');
+      console.log(error.config?.method);
+
+      console.log('');
+      console.log('URL REAL DO AXIOS:');
+      console.log(error.config?.url);
+
+      console.log('');
+      console.log('MENSAGEM DO AXIOS:');
+      console.log(error.message);
+
+      console.log('');
+      console.log('CÓDIGO DO AXIOS:');
+      console.log(error.code);
+
+      console.log('==============================================');
+      console.log('');
+
       const errorData = error.response?.data || {};
 
-      // 🕵️ O DEDO-DURO
       this.logger.error(
-        `❌ [DEDO-DURO] Falha no tiro! Status HTTP: ${error.response?.status}`,
-      );
-      this.logger.error(
-        `❌ [DEDO-DURO] Resposta do bloqueio:`,
-        JSON.stringify(errorData),
+        '❌ Erro ao solicitar Código de Pareamento:',
+        errorData || error.message,
       );
 
       throw new InternalServerErrorException(
-        errorData.error ||
+        errorData?.error ||
+          errorData?.message ||
           'Não foi possível gerar o código de pareamento. Verifique se o formato do número está correto.',
       );
     }
@@ -126,12 +206,19 @@ export class AiService {
   ) {
     try {
       const nightclub = await this.prisma.nightclub.findUnique({
-        where: { id: nightclubId },
+        where: {
+          id: nightclubId,
+        },
       });
 
-      if (!nightclub) throw new NotFoundException('Balada não encontrada.');
+      if (!nightclub) {
+        throw new NotFoundException('Balada não encontrada.');
+      }
 
+      // 🛠️ Tratamento do preço
+      // Converte "50,00" para número que o Prisma aceita
       let formattedPrice: number | undefined = undefined;
+
       if (
         birthdayPrice !== undefined &&
         birthdayPrice !== null &&
@@ -142,6 +229,7 @@ export class AiService {
             .replace('R$', '')
             .replace(/\s/g, '')
             .replace(',', '.');
+
           formattedPrice = parseFloat(cleanString);
         } else {
           formattedPrice = Number(birthdayPrice);
@@ -149,7 +237,10 @@ export class AiService {
       }
 
       const agent = await this.prisma.aiAgent.upsert({
-        where: { nightclubId },
+        where: {
+          nightclubId,
+        },
+
         update: {
           isActive,
           systemPrompt,
@@ -157,10 +248,14 @@ export class AiService {
           promptTable,
           promptBirthday,
           promptEvents,
-          promptSchedule: promptSchedule || undefined,
+
+          promptSchedule: promptSchedule ? promptSchedule : undefined,
+
           birthdayPrice: formattedPrice,
-          mediaLinks: mediaLinks || undefined,
+
+          mediaLinks: mediaLinks ? mediaLinks : undefined,
         },
+
         create: {
           nightclubId,
           isActive,
@@ -169,15 +264,19 @@ export class AiService {
           promptTable,
           promptBirthday,
           promptEvents,
-          promptSchedule: promptSchedule || undefined,
+
+          promptSchedule: promptSchedule ? promptSchedule : undefined,
+
           birthdayPrice: formattedPrice,
-          mediaLinks: mediaLinks || undefined,
+
+          mediaLinks: mediaLinks ? mediaLinks : undefined,
         },
       });
 
       return agent;
     } catch (error: any) {
       this.logger.error('❌ Erro ao salvar configurações:', error.message);
+
       throw new InternalServerErrorException(
         'Erro ao salvar as configurações da IA.',
       );
