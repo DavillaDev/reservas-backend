@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
+
 import {
   Injectable,
   InternalServerErrorException,
@@ -34,7 +36,7 @@ export class AiService {
       const errorData = error.response?.data || {};
       const errorString = JSON.stringify(errorData).toLowerCase();
 
-      // 🛡️ BLINDAGEM: Se o erro indicar que a instância já existe (409 ou mensagem específica)
+      // 🛡️ BLINDAGEM: Se o erro indicar que a instância já existe
       if (
         error.response?.status === 409 ||
         errorString.includes('already exists') ||
@@ -45,7 +47,6 @@ export class AiService {
         );
 
         try {
-          // 🔄 ROTA DE FUGA: Em vez de criar, apenas pede para conectar
           const fallbackResponse = await axios.get(
             `${this.serviceIaUrl}/instances/connect/${nightclubId}`,
           );
@@ -62,7 +63,6 @@ export class AiService {
         }
       }
 
-      // Se for um erro real (Evolution caiu, sem internet, etc)
       this.logger.error(
         '❌ Erro ao solicitar criação de instância:',
         errorData || error.message,
@@ -78,22 +78,30 @@ export class AiService {
   // ===========================================================================
   async requestWhatsappCode(nightclubId: string, number: string) {
     try {
+      const targetUrl = `${this.serviceIaUrl}/instances/connect-code`;
+
       this.logger.log(
         `🔢 Tentando solicitar Código de Pareamento para a balada: ${nightclubId}, número: ${number}`,
       );
 
-      const response = await axios.post(
-        `${this.serviceIaUrl}/instances/connect-code`,
-        { nightclubId, number },
-      );
+      // 🕵️ O DEDO-DURO
+      this.logger.log(`🎯 [DEDO-DURO] Atirando para a URL -> ${targetUrl}`);
 
-      return response.data; // Vai retornar o { success: true, code: "XXXX-XXXX" }
+      const response = await axios.post(targetUrl, { nightclubId, number });
+
+      return response.data;
     } catch (error: any) {
       const errorData = error.response?.data || {};
+
+      // 🕵️ O DEDO-DURO
       this.logger.error(
-        '❌ Erro ao solicitar Código de Pareamento:',
-        errorData || error.message,
+        `❌ [DEDO-DURO] Falha no tiro! Status HTTP: ${error.response?.status}`,
       );
+      this.logger.error(
+        `❌ [DEDO-DURO] Resposta do bloqueio:`,
+        JSON.stringify(errorData),
+      );
+
       throw new InternalServerErrorException(
         errorData.error ||
           'Não foi possível gerar o código de pareamento. Verifique se o formato do número está correto.',
@@ -107,14 +115,14 @@ export class AiService {
   async updateSettings(
     nightclubId: string,
     isActive: boolean,
-    systemPrompt: string, // Backup antigo
+    systemPrompt: string,
     promptIdentity?: string,
     promptTable?: string,
     promptBirthday?: string,
     promptEvents?: string,
     promptSchedule?: any,
-    birthdayPrice?: string | number, // 👈 NOVO
-    mediaLinks?: any, // 👈 NOVO
+    birthdayPrice?: string | number,
+    mediaLinks?: any,
   ) {
     try {
       const nightclub = await this.prisma.nightclub.findUnique({
@@ -123,7 +131,6 @@ export class AiService {
 
       if (!nightclub) throw new NotFoundException('Balada não encontrada.');
 
-      // 🛠️ Tratamento do preço (Converte "50,00" para número que o Prisma aceita)
       let formattedPrice: number | undefined = undefined;
       if (
         birthdayPrice !== undefined &&
@@ -131,7 +138,6 @@ export class AiService {
         birthdayPrice !== ''
       ) {
         if (typeof birthdayPrice === 'string') {
-          // Remove símbolos e troca vírgula por ponto
           const cleanString = birthdayPrice
             .replace('R$', '')
             .replace(/\s/g, '')
@@ -142,7 +148,6 @@ export class AiService {
         }
       }
 
-      // O Upsert atualiza as colunas se o registro já existir, ou cria se for novo
       const agent = await this.prisma.aiAgent.upsert({
         where: { nightclubId },
         update: {
@@ -152,9 +157,9 @@ export class AiService {
           promptTable,
           promptBirthday,
           promptEvents,
-          promptSchedule: promptSchedule ? promptSchedule : undefined,
-          birthdayPrice: formattedPrice, // 👈 NOVO
-          mediaLinks: mediaLinks ? mediaLinks : undefined, // 👈 NOVO
+          promptSchedule: promptSchedule || undefined,
+          birthdayPrice: formattedPrice,
+          mediaLinks: mediaLinks || undefined,
         },
         create: {
           nightclubId,
@@ -164,9 +169,9 @@ export class AiService {
           promptTable,
           promptBirthday,
           promptEvents,
-          promptSchedule: promptSchedule ? promptSchedule : undefined,
-          birthdayPrice: formattedPrice, // 👈 NOVO
-          mediaLinks: mediaLinks ? mediaLinks : undefined, // 👈 NOVO
+          promptSchedule: promptSchedule || undefined,
+          birthdayPrice: formattedPrice,
+          mediaLinks: mediaLinks || undefined,
         },
       });
 
