@@ -34,6 +34,9 @@ import { PaymentsModule } from './payments/payments.module';
 // 🤖 MÓDULO DE INTELIGÊNCIA ARTIFICIAL (NOVO)
 import { AiModule } from './modules/ai/ai.module';
 
+// 🎟️ MÓDULO DE EVENTOS E INGRESSOS (NOVO)
+import { EventsModule } from './events/events.module';
+
 @Module({
   imports: [
     PrismaModule,
@@ -56,7 +59,8 @@ import { AiModule } from './modules/ai/ai.module';
     VipModule,
     NotificationsModule,
     PaymentsModule,
-    AiModule, // 👈 Módulo de IA registrado aqui
+    AiModule,
+    EventsModule, // 👈 Módulo de Eventos registrado aqui
   ],
   controllers: [AppController, UploadController, SuperController],
   providers: [

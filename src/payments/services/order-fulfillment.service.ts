@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../../prisma/prisma.service'; // Ajuste o caminho se necessário
-import { MailService } from '../../mail/mail.service'; // Ajuste o caminho se necessário
+import { PrismaService } from '../../../prisma/prisma.service';
+import { MailService } from '../../mail/mail.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
@@ -75,10 +75,6 @@ export class OrderFulfillmentService {
         this.logger.log(
           `💰 [COMISSÃO] Calculada: R$ ${calcCommission} para o promoter ${promoter.name}`,
         );
-      } else {
-        this.logger.log(
-          `ℹ️ [COMISSÃO] Ignorada (Reserva Gratuita) para o promoter ${promoter.name}`,
-        );
       }
     }
 
@@ -96,17 +92,77 @@ export class OrderFulfillmentService {
 
     this.logger.log(`✅ [WEBHOOK] Reserva ${updated.id} confirmada.`);
 
-    // 🚀 DISPARO DE AÇÕES PÓS-VENDA (Assíncronas para não travar o fluxo)
+    // 🚀 DISPARO DE AÇÕES PÓS-VENDA
     this.executePostFulfillmentActions(updated);
 
     return updated;
   }
 
   // ===========================================================================
-  // 2. AÇÕES PÓS-VENDA (E-mail, Push, WhatsApp)
+  // 1.5. CONFIRMAÇÃO DE INGRESSOS (NOVO)
+  // ===========================================================================
+  async confirmTickets(paymentId: string) {
+    const tickets = await this.prisma.ticket.findMany({
+      where: {
+        paymentId: {
+          startsWith: paymentId.toString(),
+        },
+      },
+      include: {
+        event: {
+          include: { nightclub: true },
+        },
+        batch: true,
+      },
+    });
+
+    if (tickets.length === 0) return false;
+
+    // Trava de idempotência
+    const alreadyPaid = tickets.every((t) => t.status === 'PAID');
+    if (alreadyPaid) return true;
+
+    // Atualiza status para PAID
+    await this.prisma.ticket.updateMany({
+      where: {
+        paymentId: {
+          startsWith: paymentId.toString(),
+        },
+      },
+      data: { status: 'PAID' },
+    });
+
+    // Incrementa o estoque vendido no lote
+    const batchId = tickets[0].batchId;
+    await this.prisma.ticketBatch.update({
+      where: { id: batchId },
+      data: {
+        soldQuantity: {
+          increment: tickets.length,
+        },
+      },
+    });
+
+    this.logger.log(
+      `🎟️ [WEBHOOK] ${tickets.length} ingresso(s) confirmado(s) para o pagamento ${paymentId}!`,
+    );
+
+    // Dispara o WhatsApp para o comprador dos ingressos
+    const firstTicket = tickets[0];
+    this.dispararIngressosWhatsapp(firstTicket, tickets.length).catch((err) =>
+      this.logger.error(
+        '❌ Erro no envio de ingressos via WhatsApp:',
+        err.message,
+      ),
+    );
+
+    return true;
+  }
+
+  // ===========================================================================
+  // 2. AÇÕES PÓS-VENDA (Reservas)
   // ===========================================================================
   private executePostFulfillmentActions(reservation: any) {
-    // 📧 Envia E-mail para o Cliente
     if (reservation.customerEmail) {
       this.mailService
         .sendReservationConfirmation(reservation, reservation.nightclub.name)
@@ -115,7 +171,6 @@ export class OrderFulfillmentService {
         );
     }
 
-    // 🔔 Envia Push Notification para o App do Dono/Gerente
     this.notificationsService
       .notifyNewReservation(reservation.nightclubId, {
         id: reservation.id,
@@ -124,14 +179,13 @@ export class OrderFulfillmentService {
       })
       .catch((err) => this.logger.error('Erro ao enviar Push:', err.message));
 
-    // 📲 Dispara o Ingresso via WhatsApp (IA)
     this.dispararIngressoWhatsapp(reservation).catch((err) =>
       this.logger.error('❌ Erro no Ingresso WhatsApp:', err.message),
     );
   }
 
   // ===========================================================================
-  // 3. INTEGRAÇÃO WHATSAPP IA
+  // 3. INTEGRAÇÃO WHATSAPP (Reserva)
   // ===========================================================================
   private async dispararIngressoWhatsapp(reservation: any) {
     try {
@@ -167,11 +221,58 @@ export class OrderFulfillmentService {
       );
 
       this.logger.log(
-        `📲 [WhatsApp] Ingresso (Link Checkout) enviado para ${reservation.customerPhone}`,
+        `📲 [WhatsApp] Confirmação enviada para ${reservation.customerPhone}`,
       );
     } catch (error: any) {
       this.logger.error(
-        'Falha ao disparar ingresso automático via WhatsApp:',
+        'Falha ao disparar WhatsApp de reserva:',
+        error.message,
+      );
+    }
+  }
+
+  // ===========================================================================
+  // 3.5. INTEGRAÇÃO WHATSAPP (Ingressos)
+  // ===========================================================================
+  private async dispararIngressosWhatsapp(ticket: any, quantity: number) {
+    try {
+      const serviceIaUrl =
+        this.configService.get('SERVICE_IA_URL') || 'http://localhost:10000';
+      const internalKey = this.configService.get('INTERNAL_SERVICE_KEY');
+      const frontendUrl =
+        this.configService.get('FRONTEND_URL') || 'https://reservasclub.com.br';
+
+      // Link onde o cliente visualiza os ingressos/QR codes dele
+      const eventLink = `${frontendUrl}/events/${ticket.eventId}/my-tickets`;
+
+      const mensagem =
+        `✅ *PAGAMENTO DE INGRESSOS CONFIRMADO!*\n\n` +
+        `Fala *${ticket.customerName.split(' ')[0]}*! Seus *${quantity}x ingresso(s)* para o evento *${ticket.event.title.toUpperCase()}* (${ticket.batch.name}) estão garantidos!\n\n` +
+        `🎫 *SEUS QR CODES DE ENTRADA:*\n` +
+        `${eventLink}\n\n` +
+        `Acesse o link acima para visualizar os QR Codes individuais de cada ingresso. Apresente na portaria e boa festa! 🥂`;
+
+      await this.withRetry(() =>
+        axios.post(
+          `${serviceIaUrl}/whatsapp/send-message`,
+          {
+            nightclubId: ticket.event.nightclubId,
+            number: ticket.customerPhone,
+            text: mensagem,
+          },
+          {
+            headers: { 'x-internal-key': internalKey },
+            timeout: 5000,
+          },
+        ),
+      );
+
+      this.logger.log(
+        `📲 [WhatsApp] Ingressos enviados para ${ticket.customerPhone}`,
+      );
+    } catch (error: any) {
+      this.logger.error(
+        'Falha ao disparar WhatsApp de ingressos:',
         error.message,
       );
     }

@@ -11,26 +11,26 @@ datasource db {
 // 1. USUÁRIOS (QUEM LOGA NO SISTEMA: ADMIN/STAFF/MANAGER/PROMOTER)
 // =========================================================
 model User {
-  id                String             @id @default(uuid())
-  email             String             @unique
-  password          String // Senha Hasheada (Bcrypt)
-  name              String
+  id              String         @id @default(uuid())
+  email           String         @unique
+  password        String // Senha Hasheada (Bcrypt)
+  name            String
   
   // Controle de Acesso
-  role              UserRole           @default(STAFF)
+  role            UserRole       @default(STAFF)
   
   // Vínculo: A qual balada esse usuário pertence?
-  nightclubId       String?
-  nightclub         Nightclub?         @relation(fields: [nightclubId], references: [id])
+  nightclubId     String?
+  nightclub       Nightclub?     @relation(fields: [nightclubId], references: [id])
 
-  // 💰 REGRAS DE COMISSÃO DO PROMOTER (NOVO - INDIVIDUAL)
-  commissionType    CommissionType     @default(FIXED)
-  commissionValue   Decimal            @default(0.0)
+  // 💰 REGRAS DE COMISSÃO DO PROMOTER (INDIVIDUAL)
+  commissionType  CommissionType @default(FIXED)
+  commissionValue Decimal        @default(0.0)
 
-  // 🔔 NOVA RELAÇÃO: Dispositivos para notificações push
+  // 🔔 Dispositivos para notificações push
   pushSubscriptions PushSubscription[]
 
-  // 💰 NOVA RELAÇÃO: Reservas vinculadas a este Promoter
+  // 💰 Reservas vinculadas a este Promoter
   promotedReservations Reservation[]   @relation("PromoterReservations")
 
   createdAt DateTime @default(now())
@@ -40,7 +40,7 @@ model User {
 }
 
 // =========================================================
-// NOVO: ARMAZENAMENTO DE TOKENS DE NOTIFICAÇÃO
+// ARMAZENAMENTO DE TOKENS DE NOTIFICAÇÃO
 // =========================================================
 model PushSubscription {
   id         String   @id @default(uuid())
@@ -61,7 +61,7 @@ model PushSubscription {
 }
 
 // =========================================================
-// 2. A BALADA (O CLIENTE QUE TE PAGA)
+// 2. A BALADA / ORGANIZADOR (O CLIENTE QUE TE PAGA)
 // =========================================================
 model Nightclub {
   id                String             @id @default(uuid())
@@ -81,7 +81,7 @@ model Nightclub {
   
   settings          Json?     
   
-  // 💰 GESTÃO DE PLANOS (NOVO)
+  // 💰 GESTÃO DE PLANOS
   plan              NightclubPlan      @default(FREE)
   planExpiresAt     DateTime?
 
@@ -92,7 +92,10 @@ model Nightclub {
   spaces            Space[]
   reservations      Reservation[]
   
-  // 🔔 NOVA RELAÇÃO: SaaS de IA e WhatsApp
+  // 🎟️ NOVO: Eventos de Ingressos (Festas/Pool Parties)
+  events            Event[]
+
+  // 🔔 SaaS de IA e WhatsApp
   whatsappInstances WhatsappInstance[]
   aiAgent           AiAgent?
 
@@ -111,13 +114,13 @@ model Space {
   status          SpaceStatus @default(ACTIVE)
   
   price           Decimal?    @default(0.0)
-  // 🎂 NOVO: PREÇO ESPECIAL PARA ANIVERSÁRIOS
+  // 🎂 PREÇO ESPECIAL PARA ANIVERSÁRIOS
   birthdayPrice   Decimal?    @default(0.0) 
   
   minConsumption  Decimal?    @default(0.0)
 
   description     String?
-  mapPosition     Json?        
+  mapPosition     Json?       
 
   nightclub    Nightclub   @relation(fields: [nightclubId], references: [id])
   reservations Reservation[]
@@ -129,25 +132,28 @@ model Space {
 // 4. O CLIENTE ( CRM E BLACKLIST)
 // =========================================================
 model Customer {
-  id           String    @id @default(uuid())
+  id           String        @id @default(uuid())
   name         String
-  email        String    @unique
+  email        String        @unique
   phone        String
-  cpf          String?   @unique 
+  cpf          String?       @unique 
   birthdayDate DateTime?
   
-  isBlocked    Boolean   @default(false)
+  isBlocked    Boolean       @default(false)
   
   reservations Reservation[]
   
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  // 🎟️ NOVO: Ingressos comprados pelo cliente
+  tickets      Ticket[]
+  
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   @@map("customers")
 }
 
 // =========================================================
-// 5. AS RESERVAS
+// 5. AS RESERVAS DE MESAS / BISTRÔS
 // =========================================================
 model Reservation {
   id                String            @id @default(uuid())
@@ -160,7 +166,7 @@ model Reservation {
   customerEmail     String?           
   
   customerId        String?           
-  customer          Customer?          @relation(fields: [customerId], references: [id])
+  customer          Customer?         @relation(fields: [customerId], references: [id])
   
   isBirthday        Boolean           @default(false) 
   birthdayDate      DateTime?         
@@ -169,10 +175,10 @@ model Reservation {
   status            ReservationStatus @default(PENDING)
   checkInTime       DateTime?
   checkInAt         DateTime? 
-  validationToken   String? @unique
+  validationToken   String?           @unique
 
-  amount            Decimal?   @default(0.0)
-  paymentId         String?    @unique 
+  amount            Decimal?          @default(0.0)
+  paymentId         String?           @unique 
   paymentCreatedAt  DateTime?
   paymentDeadline   DateTime?
   
@@ -181,15 +187,92 @@ model Reservation {
   nightclub Nightclub @relation(fields: [nightclubId], references: [id])
   space     Space     @relation(fields: [spaceId], references: [id])
 
-  // 💰 NOVO VÍNCULO: Promoter
+  // 💰 VÍNCULO: Promoter
   promoterId        String?
-  promoter          User?     @relation("PromoterReservations", fields: [promoterId], references: [id])
+  promoter          User?             @relation("PromoterReservations", fields: [promoterId], references: [id])
 
   // 💰 CONTROLE FINANCEIRO DO PROMOTER
-  commissionStatus CommissionStatus @default(PENDING)
-  commissionAmount Decimal?         @default(0.0)
+  commissionStatus CommissionStatus   @default(PENDING)
+  commissionAmount Decimal?           @default(0.0)
 
   @@map("reservations")
+}
+
+// =========================================================
+// 🎟️ 5.1. EVENTOS / FESTAS DE INGRESSO (NOVO)
+// =========================================================
+model Event {
+  id          String        @id @default(uuid())
+  nightclubId String
+  title       String        // Ex: "Pool Party do Chapada"
+  description String?       @db.Text
+  bannerUrl   String?
+  eventDate   DateTime      // Data e hora do evento
+  status      EventStatus   @default(ACTIVE)
+
+  nightclub   Nightclub     @relation(fields: [nightclubId], references: [id], onDelete: Cascade)
+  batches     TicketBatch[]
+  tickets     Ticket[]
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@map("events")
+}
+
+// =========================================================
+// 🎟️ 5.2. LOTES DE INGRESSOS (NOVO)
+// =========================================================
+model TicketBatch {
+  id          String       @id @default(uuid())
+  eventId     String
+  name        String       // Ex: "1º Lote - Unissex", "Área VIP"
+  price       Decimal      @default(0.0)
+  totalQuantity Int        // Ex: 100 ingressos disponíveis
+  soldQuantity  Int        @default(0) // Ingressos já vendidos/confirmados
+  isActive    Boolean      @default(true)
+
+  event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  tickets     Ticket[]
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@map("ticket_batches")
+}
+
+// =========================================================
+// 🎟️ 5.3. INGRESSOS EMITIDOS (NOVO)
+// =========================================================
+model Ticket {
+  id              String       @id @default(uuid())
+  eventId         String
+  batchId         String
+  customerId      String?
+  
+  customerName    String
+  customerPhone   String
+  customerEmail   String?
+  customerCpf     String?
+
+  price           Decimal      @default(0.0)
+  status          TicketStatus @default(PENDING)
+  
+  validationToken String       @unique // Hash/Token único impresso no QR Code
+  checkInAt       DateTime?
+
+  // Dados de Pagamento (Mercado Pago)
+  paymentId       String?      @unique
+  paymentDeadline DateTime?
+
+  event           Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  batch           TicketBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  customer        Customer?    @relation(fields: [customerId], references: [id])
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@map("tickets")
 }
 
 // =========================================================
@@ -217,42 +300,42 @@ model VipToken {
 // 7. CONVIDADOS DA LISTA VIP
 // =========================================================
 model VipGuest {
-  id           String      @id @default(uuid())
-  vipTokenId   String
+  id              String         @id @default(uuid())
+  vipTokenId      String
   
-  name         String
-  phone        String?
+  name            String
+  phone           String?
 
   validationToken String?        @unique
   
-  status       VipGuestStatus @default(PENDING)
-  checkInAt    DateTime?
+  status          VipGuestStatus @default(PENDING)
+  checkInAt       DateTime?
   
-  vipToken     VipToken    @relation(fields: [vipTokenId], references: [id])
-  createdAt    DateTime    @default(now())
+  vipToken        VipToken       @relation(fields: [vipTokenId], references: [id])
+  createdAt       DateTime       @default(now())
 
   @@map("vip_guests")
 }
 
 // =========================================================
-// 8. INSTÂNCIAS DE WHATSAPP (EVOLUTION API) - NOVO
+// 8. INSTÂNCIAS DE WHATSAPP (EVOLUTION API)
 // =========================================================
 model WhatsappInstance {
-  id              String    @id @default(uuid())
-  nightclubId     String
-  instanceName    String    @unique // Ex: upbar_123
-  status          String    @default("DISCONNECTED") // CONNECTED, DISCONNECTED, QRCODE
-  qrCode          String?   @db.Text
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id           String    @id @default(uuid())
+  nightclubId  String
+  instanceName String    @unique // Ex: upbar_123
+  status       String    @default("DISCONNECTED") // CONNECTED, DISCONNECTED, QRCODE
+  qrCode       String?   @db.Text
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  nightclub       Nightclub @relation(fields: [nightclubId], references: [id], onDelete: Cascade)
+  nightclub    Nightclub @relation(fields: [nightclubId], references: [id], onDelete: Cascade)
 
   @@map("whatsapp_instances")
 }
 
 // =========================================================
-// 9. CONFIGURAÇÃO DA IA (GEMINI) - NOVO
+// 9. CONFIGURAÇÃO DA IA (GEMINI)
 // =========================================================
 model AiAgent {
   id              String   @id @default(uuid())
@@ -262,18 +345,18 @@ model AiAgent {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  // 🛡️ NOVAS COLUNAS MODULARIZADAS
+  // 🛡️ COLUNAS MODULARIZADAS
   promptIdentity  String?  @db.Text
   promptTable     String?  @db.Text
   promptBirthday  String?  @db.Text
   promptEvents    String?  @db.Text
   
   // 📅 PROGRAMAÇÃO E PRECIFICAÇÃO
-  promptSchedule  Json?    // Estrutura de dias da semana (ex: { "mon": { active: true, text: "..." } })
-  birthdayPrice   Decimal? @default(0.0) // 👈 NOVO: Preço base da reserva de aniversário
+  promptSchedule  Json?    // Estrutura de dias da semana
+  birthdayPrice   Decimal? @default(0.0) // Preço base da reserva de aniversário
   
   // 📸 MÍDIAS (FLYERS E VÍDEOS)
-  mediaLinks      Json?    // 👈 NOVO: Armazena as URLs do Cloudinary (ex: { "monFlyer": "url", "birthdayVideo": "url" })
+  mediaLinks      Json?    // URLs do Cloudinary
 
   nightclub       Nightclub @relation(fields: [nightclubId], references: [id], onDelete: Cascade)
 
@@ -287,9 +370,9 @@ model AiAgent {
 enum UserRole {
   SUPERADMIN 
   OWNER      
-  MANAGER    // 👈 NOVO: Perfil de Gerente
+  MANAGER    
   STAFF      
-  PROMOTER   // 👈 NOVO: Perfil de Promoter
+  PROMOTER   
 }
 
 enum SpaceType {
@@ -314,12 +397,26 @@ enum ReservationStatus {
 }
 
 enum VipGuestStatus {
-  PENDING      
+  PENDING     
   CHECKED_IN   
   CANCELLED    
 }
 
-// NOVO: PLANOS DO SAAS
+// 🎟️ NOVOS ENUMS: EVENTOS E INGRESSOS
+enum EventStatus {
+  ACTIVE
+  FINISHED
+  CANCELED
+}
+
+enum TicketStatus {
+  PENDING     // Aguardando pagamento do Pix
+  PAID        // Pago e pronto para uso
+  CHECKED_IN  // Utilizado na portaria da festa
+  CANCELED    // Cancelado / Não pago
+}
+
+// PLANOS DO SAAS
 enum NightclubPlan {
   FREE
   PREMIUM
@@ -331,10 +428,10 @@ enum CommissionType {
 }
 
 enum CommissionStatus {
-  PENDING    // Aguardando o cliente ir na balada
-  APPROVED   // Cliente foi, comissão liberada para pagamento
-  PAID       // Dono já fez o Pix pro promoter
-  CANCELED   // Cliente não foi (No-show) ou cancelou
+  PENDING    
+  APPROVED   
+  PAID       
+  CANCELED   
 }
 
 // =========================================================
@@ -348,7 +445,6 @@ model AiMemory {
   content       String   @db.Text
   createdAt     DateTime @default(now())
 
-  // Index para a busca de histórico ser instantânea
   @@index([nightclubId, customerPhone])
   @@map("ai_memory")
 }

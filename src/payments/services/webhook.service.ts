@@ -30,15 +30,16 @@ export class WebhookService {
 
     try {
       // 1. Busca os dados REAIS e blindados lá no Mercado Pago
-      const paymentData: any = await this.mercadoPagoProvider.getPaymentStatus(
+      const rawPaymentData = await this.mercadoPagoProvider.getPaymentStatus(
         platformToken,
         paymentId,
       );
+      const paymentData = rawPaymentData as Record<string, any>;
 
       // Se não estiver aprovado (ex: gerou o pix mas não pagou, ou cartão recusado), apenas ignora.
       if (paymentData.status !== 'approved') return;
 
-      const externalRef = paymentData.external_reference;
+      const externalRef = paymentData.external_reference as string | undefined;
 
       // =================================================================
       // 🛑 CASO A: UPGRADE DE PLANO PREMIUM (SaaS da Balada)
@@ -50,6 +51,16 @@ export class WebhookService {
           data: { plan: 'PREMIUM', planExpiresAt: addYears(new Date(), 1) },
         });
         this.logger.log(`✨ [WEBHOOK] Balada ${nightclubId} agora é PREMIUM!`);
+        return;
+      }
+
+      // =================================================================
+      // 🛑 CASO C: COMPRA DE INGRESSOS (Eventos / Pool Party)
+      // Delegando para o OrderFulfillmentService (Banco + Estoque + WhatsApp)
+      // =================================================================
+      const ticketHandled =
+        await this.orderFulfillmentService.confirmTickets(paymentId);
+      if (ticketHandled) {
         return;
       }
 
@@ -68,7 +79,7 @@ export class WebhookService {
 
       if (!reservation) {
         this.logger.warn(
-          `❌ [WEBHOOK] Reserva não encontrada para o Pagamento MP: ${paymentId}`,
+          `❌ [WEBHOOK] Reserva ou Ingresso não encontrado para o Pagamento MP: ${paymentId}`,
         );
         return;
       }
@@ -89,8 +100,9 @@ export class WebhookService {
         reservation.id,
         paymentId,
       );
-    } catch (error: any) {
-      this.logger.error('❌ Erro crítico ao processar Webhook:', error.message);
+    } catch (error: unknown) {
+      const err = error as { message?: string };
+      this.logger.error('❌ Erro crítico ao processar Webhook:', err.message);
     }
   }
 }
