@@ -67,6 +67,11 @@ export class EventsService {
   }
 
   async findAllByNightclub(nightclubId: string) {
+    console.log(
+      '🔍 [EventsService] Buscando eventos para a nightclubId:',
+      nightclubId,
+    );
+
     const events = (await this.prisma.event.findMany({
       where: { nightclubId },
       include: {
@@ -74,6 +79,11 @@ export class EventsService {
       },
       orderBy: { eventDate: 'asc' },
     })) as unknown as EventWithBatches[];
+
+    console.log(
+      '📦 [EventsService] Eventos brutos retornados pelo Prisma:',
+      JSON.stringify(events, null, 2),
+    );
 
     return events.map((ev) => ({
       ...ev,
