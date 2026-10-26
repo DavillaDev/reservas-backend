@@ -12,7 +12,6 @@ export class EventsService {
     nightclubId: string,
     dto: CreateEventDto & { date?: string },
   ) {
-    // 🛡️ Garante compatibilidade caso venha 'date' ou 'eventDate' do frontend
     const rawDate = dto.eventDate || dto.date;
 
     return this.prisma.event.create({
@@ -47,13 +46,20 @@ export class EventsService {
   }
 
   async findAllByNightclub(nightclubId: string) {
-    return this.prisma.event.findMany({
+    const events = await this.prisma.event.findMany({
       where: { nightclubId },
       include: {
         batches: true,
       },
       orderBy: { eventDate: 'asc' },
     });
+
+    // 🛡️ Mapeia para injetar 'date' e 'eventDate', blindando contra qualquer incompatibilidade no front
+    return events.map((ev) => ({
+      ...ev,
+      date: ev.eventDate,
+      eventDate: ev.eventDate,
+    }));
   }
 
   async findOne(id: string) {
@@ -69,6 +75,9 @@ export class EventsService {
       throw new NotFoundException('Evento não encontrado');
     }
 
-    return event;
+    return {
+      ...event,
+      date: event.eventDate,
+    };
   }
 }
