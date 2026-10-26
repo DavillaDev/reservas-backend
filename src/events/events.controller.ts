@@ -1,3 +1,4 @@
+// src/events/events.controller.ts
 import { Controller, Post, Get, Body, Param, UseGuards } from '@nestjs/common';
 import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -9,12 +10,10 @@ export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
   @UseGuards(JwtAuthGuard)
-  @Post('nightclub/:nightclubId')
-  async createEvent(
-    @Param('nightclubId') nightclubId: string,
-    @Body() dto: CreateEventDto,
-  ) {
-    return this.eventsService.createEvent(nightclubId, dto);
+  @Post()
+  async createEvent(@Body() dto: CreateEventDto & { nightclubId: string }) {
+    const { nightclubId, ...eventData } = dto;
+    return this.eventsService.createEvent(nightclubId, eventData);
   }
 
   @UseGuards(JwtAuthGuard)
