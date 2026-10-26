@@ -1,3 +1,4 @@
+// src/events/events.service.ts
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -7,14 +8,20 @@ import { CreateBatchDto } from './dto/create-batch.dto';
 export class EventsService {
   constructor(private prisma: PrismaService) {}
 
-  async createEvent(nightclubId: string, dto: CreateEventDto) {
+  async createEvent(
+    nightclubId: string,
+    dto: CreateEventDto & { date?: string },
+  ) {
+    // 🛡️ Garante compatibilidade caso venha 'date' ou 'eventDate' do frontend
+    const rawDate = dto.eventDate || dto.date;
+
     return this.prisma.event.create({
       data: {
         nightclubId,
         title: dto.title,
         description: dto.description,
         bannerUrl: dto.bannerUrl,
-        eventDate: new Date(dto.eventDate),
+        eventDate: rawDate ? new Date(rawDate) : new Date(),
       },
     });
   }
