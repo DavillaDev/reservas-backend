@@ -42,6 +42,20 @@ export class EventsService {
         description: dto.description,
         bannerUrl: dto.bannerUrl,
         eventDate: rawDate ? new Date(rawDate) : new Date(),
+        batches:
+          dto.batches && dto.batches.length > 0
+            ? {
+                create: dto.batches.map((b) => ({
+                  name: b.name,
+                  price: b.price,
+                  totalQuantity: b.totalQuantity,
+                  isActive: true,
+                })),
+              }
+            : undefined,
+      },
+      include: {
+        batches: true,
       },
     });
   }
