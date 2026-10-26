@@ -1,3 +1,4 @@
+// src/tickets/tickets.service.ts
 import {
   Injectable,
   NotFoundException,
@@ -7,7 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { Ticket } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 
 @Injectable()
 export class TicketsService {
@@ -35,9 +36,14 @@ export class TicketsService {
     }
 
     const nightclub = batch.event.nightclub;
-    if (!nightclub.mpAccessToken) {
+
+    // 🛡️ Fallback inteligente usando a sua variável exata do .env
+    const primaryAccessToken = nightclub.mpAccessToken;
+    const fallbackAccessToken = process.env.MP_PLATFORM_ACCESS_TOKEN;
+
+    if (!primaryAccessToken && !fallbackAccessToken) {
       throw new BadRequestException(
-        'A balada não possui credenciais do Mercado Pago configuradas.',
+        'A balada não possui credenciais do Mercado Pago e nenhum token de plataforma foi configurado.',
       );
     }
 
@@ -66,9 +72,9 @@ export class TicketsService {
       createdTickets.push(ticket);
     }
 
-    // 4. Integrar com o Mercado Pago para gerar a cobrança Pix
-    try {
-      const mpResponse = await axios.post(
+    // Função interna para tentar a requisição Pix no Mercado Pago com um token específico
+    const requestMpPix = async (token: string) => {
+      return axios.post(
         'https://api.mercadopago.com/v1/payments',
         {
           transaction_amount: totalAmount,
@@ -84,11 +90,37 @@ export class TicketsService {
         },
         {
           headers: {
-            Authorization: `Bearer ${nightclub.mpAccessToken}`,
+            Authorization: `Bearer ${token}`,
             'X-Idempotency-Key': paymentId,
           },
         },
       );
+    };
+
+    // 4. Integrar com o Mercado Pago para gerar a cobrança Pix (Com Fallback)
+    try {
+      let mpResponse;
+      try {
+        if (primaryAccessToken) {
+          mpResponse = await requestMpPix(primaryAccessToken);
+        } else {
+          throw new Error('Token da balada não disponível, usando fallback.');
+        }
+      } catch (primaryError: unknown) {
+        const err = primaryError as AxiosError<{ message?: string }>;
+        const errData = err.response?.data;
+        console.warn(
+          '⚠️ [TicketsService] Falha ao gerar Pix com o token da balada. Tentando MP_PLATFORM_ACCESS_TOKEN...',
+          errData || err.message,
+        );
+
+        if (!fallbackAccessToken) {
+          throw primaryError;
+        }
+
+        // Tenta com o token de plataforma
+        mpResponse = await requestMpPix(fallbackAccessToken);
+      }
 
       const paymentData = mpResponse.data as Record<string, any>;
       const pointOfInteraction = paymentData.point_of_interaction as
@@ -120,10 +152,11 @@ export class TicketsService {
         })),
       };
     } catch (error: unknown) {
-      const err = error as { response?: { data?: any }; message?: string };
+      const err = error as AxiosError<{ message?: string }>;
+      const errorData = err.response?.data;
       console.error(
         'Erro ao gerar pagamento no Mercado Pago:',
-        err?.response?.data || err.message,
+        errorData || err.message,
       );
       throw new BadRequestException(
         'Erro ao gerar cobrança Pix no Mercado Pago. Tente novamente.',
