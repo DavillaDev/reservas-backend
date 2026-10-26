@@ -4,6 +4,27 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 
+interface EventWithBatches {
+  id: string;
+  nightclubId: string;
+  title: string;
+  description: string | null;
+  bannerUrl: string | null;
+  eventDate: Date;
+  status: string;
+  createdAt: Date;
+  updatedAt: Date;
+  batches?: Array<{
+    id: string;
+    eventId: string;
+    name: string;
+    price: number;
+    totalQuantity: number;
+    soldQuantity: number;
+    isActive: boolean;
+  }>;
+}
+
 @Injectable()
 export class EventsService {
   constructor(private prisma: PrismaService) {}
@@ -46,30 +67,30 @@ export class EventsService {
   }
 
   async findAllByNightclub(nightclubId: string) {
-    const events = await this.prisma.event.findMany({
+    const events = (await this.prisma.event.findMany({
       where: { nightclubId },
       include: {
         batches: true,
       },
       orderBy: { eventDate: 'asc' },
-    });
+    })) as unknown as EventWithBatches[];
 
-    // 🛡️ Mapeia para injetar 'date' e 'eventDate', blindando contra qualquer incompatibilidade no front
     return events.map((ev) => ({
       ...ev,
       date: ev.eventDate,
       eventDate: ev.eventDate,
+      batches: ev.batches || [],
     }));
   }
 
   async findOne(id: string) {
-    const event = await this.prisma.event.findUnique({
+    const event = (await this.prisma.event.findUnique({
       where: { id },
       include: {
         batches: true,
         tickets: true,
       },
-    });
+    })) as unknown as EventWithBatches | null;
 
     if (!event) {
       throw new NotFoundException('Evento não encontrado');
@@ -78,6 +99,7 @@ export class EventsService {
     return {
       ...event,
       date: event.eventDate,
+      batches: event.batches || [],
     };
   }
 }
