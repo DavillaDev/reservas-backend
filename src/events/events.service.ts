@@ -102,4 +102,18 @@ export class EventsService {
       batches: event.batches || [],
     };
   }
+
+  async remove(id: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id },
+    });
+
+    if (!event) {
+      throw new NotFoundException('Evento não encontrado');
+    }
+
+    return this.prisma.event.delete({
+      where: { id },
+    });
+  }
 }

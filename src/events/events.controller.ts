@@ -1,5 +1,13 @@
 // src/events/events.controller.ts
-import { Controller, Post, Get, Body, Param, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+} from '@nestjs/common';
 import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
@@ -33,5 +41,11 @@ export class EventsController {
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.eventsService.findOne(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id')
+  async remove(@Param('id') id: string) {
+    return this.eventsService.remove(id);
   }
 }
