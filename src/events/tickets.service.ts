@@ -1,4 +1,5 @@
-// src/tickets/tickets.service.ts
+// src/events/tickets.service.ts
+
 import {
   Injectable,
   NotFoundException,
@@ -8,7 +9,32 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { Ticket } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosResponse } from 'axios';
+
+interface MercadoPagoPaymentResponse {
+  point_of_interaction?: {
+    transaction_data?: {
+      qr_code?: string;
+      qr_code_base64?: string;
+      ticket_url?: string;
+    };
+  };
+  [key: string]: unknown;
+}
+
+// Função auxiliar isolada com tipagem segura para calar o ESLint nos blocos catch
+function getErrorDetails(error: unknown): {
+  data: unknown;
+  message: string;
+} {
+  const err = error as Record<string, unknown>;
+  const response = err?.response as Record<string, unknown> | undefined;
+  const data = response?.data;
+  const message =
+    typeof err?.message === 'string' ? err.message : 'Erro desconhecido';
+
+  return { data, message };
+}
 
 @Injectable()
 export class TicketsService {
@@ -18,7 +44,13 @@ export class TicketsService {
     // 1. Buscar o lote e o evento vinculado para pegar a balada e o preço
     const batch = await this.prisma.ticketBatch.findUnique({
       where: { id: dto.batchId },
-      include: { event: { include: { nightclub: true } } },
+      include: {
+        event: {
+          include: {
+            nightclub: true,
+          },
+        },
+      },
     });
 
     if (!batch || !batch.isActive) {
@@ -29,6 +61,7 @@ export class TicketsService {
 
     // 2. Validar se há estoque suficiente no lote
     const availableStock = batch.totalQuantity - batch.soldQuantity;
+
     if (dto.quantity > availableStock) {
       throw new BadRequestException(
         `Estoque insuficiente. Restam apenas ${availableStock} ingressos neste lote.`,
@@ -37,7 +70,7 @@ export class TicketsService {
 
     const nightclub = batch.event.nightclub;
 
-    // 🛡️ Fallback inteligente usando a sua variável exata do .env
+    // Token principal da balada + fallback da plataforma
     const primaryAccessToken = nightclub.mpAccessToken;
     const fallbackAccessToken = process.env.MP_PLATFORM_ACCESS_TOKEN;
 
@@ -51,8 +84,9 @@ export class TicketsService {
     const totalAmount = unitPrice * dto.quantity;
     const paymentId = `TICKET_${randomUUID()}`;
 
-    // 3. Criar os ingressos como PENDING no banco tipados com o model do Prisma
+    // 3. Criar os ingressos como PENDING
     const createdTickets: Ticket[] = [];
+
     for (let i = 0; i < dto.quantity; i++) {
       const ticket = await this.prisma.ticket.create({
         data: {
@@ -64,17 +98,20 @@ export class TicketsService {
           customerCpf: dto.customerCpf,
           price: unitPrice,
           status: 'PENDING',
-          validationToken: randomUUID(), // Token único e individual para o QR Code
+          validationToken: randomUUID(),
           paymentId: `${paymentId}_${i}`,
-          paymentDeadline: new Date(Date.now() + 30 * 60 * 1000), // Expira em 30 min
+          paymentDeadline: new Date(Date.now() + 30 * 60 * 1000),
         },
       });
+
       createdTickets.push(ticket);
     }
 
-    // Função interna para tentar a requisição Pix no Mercado Pago com um token específico
-    const requestMpPix = async (token: string) => {
-      return axios.post(
+    // Requisição Pix no Mercado Pago
+    const requestMpPix = async (
+      token: string,
+    ): Promise<AxiosResponse<MercadoPagoPaymentResponse>> => {
+      return axios.post<MercadoPagoPaymentResponse>(
         'https://api.mercadopago.com/v1/payments',
         {
           transaction_amount: totalAmount,
@@ -84,7 +121,10 @@ export class TicketsService {
             email: dto.customerEmail || 'cliente@reservasclub.com',
             first_name: dto.customerName,
             identification: dto.customerCpf
-              ? { type: 'CPF', number: dto.customerCpf }
+              ? {
+                  type: 'CPF',
+                  number: dto.customerCpf,
+                }
               : undefined,
           },
         },
@@ -97,9 +137,10 @@ export class TicketsService {
       );
     };
 
-    // 4. Integrar com o Mercado Pago para gerar a cobrança Pix (Com Fallback)
+    // 4. Integrar com o Mercado Pago para gerar a cobrança Pix
     try {
-      let mpResponse;
+      let mpResponse: AxiosResponse<MercadoPagoPaymentResponse>;
+
       try {
         if (primaryAccessToken) {
           mpResponse = await requestMpPix(primaryAccessToken);
@@ -107,34 +148,29 @@ export class TicketsService {
           throw new Error('Token da balada não disponível, usando fallback.');
         }
       } catch (primaryError: unknown) {
-        const err = primaryError as AxiosError<{ message?: string }>;
-        const errData = err.response?.data;
+        const { data, message } = getErrorDetails(primaryError);
+
         console.warn(
           '⚠️ [TicketsService] Falha ao gerar Pix com o token da balada. Tentando MP_PLATFORM_ACCESS_TOKEN...',
-          errData || err.message,
+          data ?? message,
         );
 
         if (!fallbackAccessToken) {
           throw primaryError;
         }
 
-        // Tenta com o token de plataforma
+        // Tenta com o token da plataforma
         mpResponse = await requestMpPix(fallbackAccessToken);
       }
 
-      const paymentData = mpResponse.data as Record<string, any>;
-      const pointOfInteraction = paymentData.point_of_interaction as
-        | Record<string, any>
-        | undefined;
-      const transactionData = pointOfInteraction?.transaction_data as
-        | Record<string, any>
-        | undefined;
+      const paymentData: MercadoPagoPaymentResponse = mpResponse.data;
 
-      const qrCodePix = transactionData?.qr_code as string | undefined;
-      const qrCodeBase64 = transactionData?.qr_code_base64 as
-        | string
-        | undefined;
-      const ticketUrl = transactionData?.ticket_url as string | undefined;
+      const transactionData =
+        paymentData.point_of_interaction?.transaction_data;
+
+      const qrCodePix: string = transactionData?.qr_code ?? '';
+      const qrCodeBase64: string = transactionData?.qr_code_base64 ?? '';
+      const ticketUrl: string = transactionData?.ticket_url ?? '';
 
       return {
         success: true,
@@ -143,21 +179,22 @@ export class TicketsService {
         paymentId,
         pix: {
           qrCode: qrCodePix,
-          qrCodeBase64: qrCodeBase64,
-          ticketUrl: ticketUrl,
+          qrCodeBase64,
+          ticketUrl,
         },
-        tickets: createdTickets.map((t) => ({
-          id: t.id,
-          validationToken: t.validationToken,
+        tickets: createdTickets.map((ticket) => ({
+          id: ticket.id,
+          validationToken: ticket.validationToken,
         })),
       };
     } catch (error: unknown) {
-      const err = error as AxiosError<{ message?: string }>;
-      const errorData = err.response?.data;
+      const { data, message } = getErrorDetails(error);
+
       console.error(
         'Erro ao gerar pagamento no Mercado Pago:',
-        errorData || err.message,
+        data ?? message,
       );
+
       throw new BadRequestException(
         'Erro ao gerar cobrança Pix no Mercado Pago. Tente novamente.',
       );
@@ -170,7 +207,10 @@ export class TicketsService {
   async validateTicket(validationToken: string) {
     const ticket = await this.prisma.ticket.findUnique({
       where: { validationToken },
-      include: { event: true, batch: true },
+      include: {
+        event: true,
+        batch: true,
+      },
     });
 
     if (!ticket) {
@@ -193,10 +233,14 @@ export class TicketsService {
       );
     }
 
-    // Atualiza o status para CHECKED_IN (Check-in feito)
+    // Atualiza o status para CHECKED_IN
     const updatedTicket = await this.prisma.ticket.update({
-      where: { id: ticket.id },
-      data: { status: 'CHECKED_IN' },
+      where: {
+        id: ticket.id,
+      },
+      data: {
+        status: 'CHECKED_IN',
+      },
     });
 
     return {
