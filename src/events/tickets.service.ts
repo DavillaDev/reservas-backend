@@ -9,7 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { Ticket } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import axios, { AxiosResponse } from 'axios';
+import axios from 'axios';
 
 interface MercadoPagoPaymentResponse {
   point_of_interaction?: {
@@ -108,9 +108,7 @@ export class TicketsService {
     }
 
     // Requisição Pix no Mercado Pago
-    const requestMpPix = async (
-      token: string,
-    ): Promise<AxiosResponse<MercadoPagoPaymentResponse>> => {
+    const requestMpPix = async (token: string) => {
       return axios.post<MercadoPagoPaymentResponse>(
         'https://api.mercadopago.com/v1/payments',
         {
@@ -139,7 +137,7 @@ export class TicketsService {
 
     // 4. Integrar com o Mercado Pago para gerar a cobrança Pix
     try {
-      let mpResponse: AxiosResponse<MercadoPagoPaymentResponse>;
+      let mpResponse;
 
       try {
         if (primaryAccessToken) {
@@ -163,7 +161,7 @@ export class TicketsService {
         mpResponse = await requestMpPix(fallbackAccessToken);
       }
 
-      const paymentData: MercadoPagoPaymentResponse = mpResponse.data;
+      const paymentData = mpResponse.data as MercadoPagoPaymentResponse;
 
       const transactionData =
         paymentData.point_of_interaction?.transaction_data;
