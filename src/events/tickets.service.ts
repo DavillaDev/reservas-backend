@@ -59,10 +59,10 @@ export class TicketsService {
     const expiredIds = expiredTickets.map((t) => t.id);
 
     await this.prisma.$transaction(async (tx) => {
-      // 1. Atualiza os tickets expirados usando o enum correto do Prisma
+      // 1. Atualiza os tickets expirados usando o enum correto do seu schema (CANCELED)
       await tx.ticket.updateMany({
         where: { id: { in: expiredIds } },
-        data: { status: TicketStatus.EXPIRED },
+        data: { status: TicketStatus.CANCELED },
       });
 
       // 2. Devolve a quantidade de estoque ao lote
@@ -244,7 +244,7 @@ export class TicketsService {
   }
 
   // ===========================================================================
-  // 5. BUSCAR DADOS DO CHECKOUT DO INGRESSO (Correção do Erro 404)
+  // 5. BUSCAR DADOS DO CHECKOUT DO INGRESSO
   // ===========================================================================
   async getCheckoutData(paymentId: string) {
     const tickets = await this.prisma.ticket.findMany({
@@ -332,7 +332,6 @@ export class TicketsService {
       },
     });
 
-    // Retorno compatível com o formato esperado pela tela de CheckIn (utilizando eventDate)
     return {
       id: updatedTicket.id,
       customerName: updatedTicket.customerName,

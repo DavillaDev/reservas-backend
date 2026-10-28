@@ -1,3 +1,5 @@
+// src/payments/services/order-fulfillment.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -149,14 +151,14 @@ export class OrderFulfillmentService {
 
     const firstTicket = tickets[0];
 
-    // 📧 DISPARO DE E-MAIL PARA O COMPRADOR (Enviando o primeiro ticket ou estrutura compatível)
+    // 📧 DISPARO DE E-MAIL PARA O COMPRADOR
     if (firstTicket.customerEmail) {
       this.mailService
         .sendReservationConfirmation(
           {
             ...firstTicket,
             amount: Number(firstTicket.price) * tickets.length,
-            date: firstTicket.event.date,
+            date: firstTicket.event.eventDate,
             space: {
               name: `Ingresso: ${firstTicket.batch.name} (${tickets.length}x)`,
             },
@@ -263,12 +265,11 @@ export class OrderFulfillmentService {
       const frontendUrl =
         this.configService.get('FRONTEND_URL') || 'https://reservasclub.com.br';
 
-      // Link onde o cliente visualiza os ingressos/QR codes dele
       const eventLink = `${frontendUrl}/events/${ticket.eventId}/my-tickets`;
 
       const mensagem =
         `✅ *PAGAMENTO DE INGRESSOS CONFIRMADO!*\n\n` +
-        `Fala *${ticket.customerName.split(' ')[0]}*! Seus *${quantity}x ingresso(s)* para o evento *${ticket.event.title.toUpperCase()}* (${ticket.batch.name}) estão garantidos!\n\n` +
+        `Fala *${ticket.customerName.split(' ')[0]}*! Seus *${quantity}x ingresso(s)* para o evento *${ticket.event.title.toUpperCase()} (${ticket.batch.name})* estão garantidos!\n\n` +
         `🎫 *SEUS QR CODES DE ENTRADA:*\n` +
         `${eventLink}\n\n` +
         `Acesse o link acima para visualizar os QR Codes individuais de cada ingresso. Apresente na portaria e boa festa! 🥂`;
