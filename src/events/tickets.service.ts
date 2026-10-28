@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
-import { Ticket } from '@prisma/client';
+import { Ticket, TicketStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import axios from 'axios';
 
@@ -47,7 +47,7 @@ export class TicketsService {
     const expiredTickets = await this.prisma.ticket.findMany({
       where: {
         batchId,
-        status: 'PENDING',
+        status: TicketStatus.PENDING,
         paymentDeadline: {
           lt: now,
         },
@@ -59,10 +59,10 @@ export class TicketsService {
     const expiredIds = expiredTickets.map((t) => t.id);
 
     await this.prisma.$transaction(async (tx) => {
-      // 1. Atualiza os tickets expirados
+      // 1. Atualiza os tickets expirados usando o enum correto do Prisma
       await tx.ticket.updateMany({
         where: { id: { in: expiredIds } },
-        data: { status: 'EXPIRED' },
+        data: { status: TicketStatus.EXPIRED },
       });
 
       // 2. Devolve a quantidade de estoque ao lote
@@ -141,7 +141,7 @@ export class TicketsService {
           customerEmail: dto.customerEmail,
           customerCpf: dto.customerCpf,
           price: unitPrice,
-          status: 'PENDING',
+          status: TicketStatus.PENDING,
           validationToken: randomUUID(),
           paymentId: `${paymentId}_${i}`,
           paymentDeadline: new Date(Date.now() + 30 * 60 * 1000),
@@ -270,7 +270,7 @@ export class TicketsService {
     const event = firstTicket.event;
     const nightclub = event.nightclub;
 
-    const isPaid = tickets.every((t) => t.status === 'PAID');
+    const isPaid = tickets.every((t) => t.status === TicketStatus.PAID);
 
     return {
       paymentId,
@@ -304,11 +304,11 @@ export class TicketsService {
       throw new NotFoundException('Ingresso inválido ou não encontrado.');
     }
 
-    if (ticket.status === 'PENDING') {
+    if (ticket.status === TicketStatus.PENDING) {
       throw new BadRequestException('Este ingresso ainda não foi pago.');
     }
 
-    if (ticket.status === 'CHECKED_IN') {
+    if (ticket.status === TicketStatus.CHECKED_IN) {
       throw new BadRequestException(
         `Ingresso já utilizado! Check-in realizado em: ${ticket.updatedAt.toLocaleString(
           'pt-BR',
@@ -316,7 +316,7 @@ export class TicketsService {
       );
     }
 
-    if (ticket.status !== 'PAID') {
+    if (ticket.status !== TicketStatus.PAID) {
       throw new BadRequestException(
         `Ingresso com status inválido: ${ticket.status}`,
       );
@@ -328,17 +328,17 @@ export class TicketsService {
         id: ticket.id,
       },
       data: {
-        status: 'CHECKED_IN',
+        status: TicketStatus.CHECKED_IN,
       },
     });
 
-    // Retorno compatível com o formato esperado pela tela de CheckIn
+    // Retorno compatível com o formato esperado pela tela de CheckIn (utilizando eventDate)
     return {
       id: updatedTicket.id,
       customerName: updatedTicket.customerName,
       customerPhone: updatedTicket.customerPhone,
       customerEmail: updatedTicket.customerEmail,
-      date: ticket.event.date,
+      date: ticket.event.eventDate,
       amount: Number(updatedTicket.price),
       space: {
         name: `${ticket.event.title}\n${ticket.batch.name}`,
