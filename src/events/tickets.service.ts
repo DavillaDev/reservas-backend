@@ -40,7 +40,51 @@ function getErrorDetails(error: unknown): {
 export class TicketsService {
   constructor(private prisma: PrismaService) {}
 
+  // 🛡️ Método privado para expirar tickets pendentes e devolver o estoque ao lote
+  private async expireOutdatedPendingTickets(batchId: string) {
+    const now = new Date();
+
+    const expiredTickets = await this.prisma.ticket.findMany({
+      where: {
+        batchId,
+        status: 'PENDING',
+        paymentDeadline: {
+          lt: now,
+        },
+      },
+    });
+
+    if (expiredTickets.length === 0) return;
+
+    const expiredIds = expiredTickets.map((t) => t.id);
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Atualiza os tickets expirados
+      await tx.ticket.updateMany({
+        where: { id: { in: expiredIds } },
+        data: { status: 'EXPIRED' },
+      });
+
+      // 2. Devolve a quantidade de estoque ao lote
+      await tx.ticketBatch.update({
+        where: { id: batchId },
+        data: {
+          soldQuantity: {
+            decrement: expiredTickets.length,
+          },
+        },
+      });
+    });
+
+    console.log(
+      `🧹 [TicketsService] ${expiredTickets.length} ingressos expirados tiveram o estoque devolvido ao lote ${batchId}.`,
+    );
+  }
+
   async createTickets(dto: CreateTicketDto) {
+    // 0. Limpa tickets pendentes expirados antes de validar estoque e criar novos
+    await this.expireOutdatedPendingTickets(dto.batchId);
+
     // 1. Buscar o lote e o evento vinculado para pegar a balada e o preço
     const batch = await this.prisma.ticketBatch.findUnique({
       where: { id: dto.batchId },

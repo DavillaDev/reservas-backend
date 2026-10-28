@@ -99,7 +99,7 @@ export class OrderFulfillmentService {
   }
 
   // ===========================================================================
-  // 1.5. CONFIRMAÇÃO DE INGRESSOS (NOVO)
+  // 1.5. CONFIRMAÇÃO DE INGRESSOS (COM E-MAIL E WHATSAPP)
   // ===========================================================================
   async confirmTickets(paymentId: string) {
     const tickets = await this.prisma.ticket.findMany({
@@ -147,8 +147,29 @@ export class OrderFulfillmentService {
       `🎟️ [WEBHOOK] ${tickets.length} ingresso(s) confirmado(s) para o pagamento ${paymentId}!`,
     );
 
-    // Dispara o WhatsApp para o comprador dos ingressos
     const firstTicket = tickets[0];
+
+    // 📧 DISPARO DE E-MAIL PARA O COMPRADOR (Enviando o primeiro ticket ou estrutura compatível)
+    if (firstTicket.customerEmail) {
+      this.mailService
+        .sendReservationConfirmation(
+          {
+            ...firstTicket,
+            amount: Number(firstTicket.price) * tickets.length,
+            date: firstTicket.event.date,
+            space: {
+              name: `Ingresso: ${firstTicket.batch.name} (${tickets.length}x)`,
+            },
+            validationToken: firstTicket.validationToken,
+          },
+          firstTicket.event.nightclub.name,
+        )
+        .catch((err) =>
+          this.logger.error('Erro ao enviar e-mail de ingressos:', err.message),
+        );
+    }
+
+    // 📲 Dispara o WhatsApp para o comprador dos ingressos
     this.dispararIngressosWhatsapp(firstTicket, tickets.length).catch((err) =>
       this.logger.error(
         '❌ Erro no envio de ingressos via WhatsApp:',
