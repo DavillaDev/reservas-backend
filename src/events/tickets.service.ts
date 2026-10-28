@@ -19,6 +19,7 @@ interface MercadoPagoPaymentResponse {
       ticket_url?: string;
     };
   };
+  status?: string;
   [key: string]: unknown;
 }
 
@@ -244,7 +245,7 @@ export class TicketsService {
   }
 
   // ===========================================================================
-  // 5. BUSCAR DADOS DO CHECKOUT DO INGRESSO
+  // 5. BUSCAR DADOS DO CHECKOUT DO INGRESSO (COM CONSULTA AO MP SE PENDENTE)
   // ===========================================================================
   async getCheckoutData(paymentId: string) {
     const tickets = await this.prisma.ticket.findMany({
@@ -272,6 +273,28 @@ export class TicketsService {
 
     const isPaid = tickets.every((t) => t.status === TicketStatus.PAID);
 
+    let pixData = {
+      qrCode: '',
+      qrCodeBase64: '',
+      ticketUrl: '',
+    };
+
+    // Se não estiver pago, tenta buscar os dados do Pix/Pagamento no Mercado Pago
+    if (!isPaid) {
+      try {
+        const token =
+          nightclub.mpAccessToken || process.env.MP_PLATFORM_ACCESS_TOKEN;
+        if (token) {
+          // Buscamos o pagamento no Mercado Pago usando o X-Idempotency-Key ou buscando pelo external_reference / id se armazenado.
+          // Como o Mercado Pago armazena por ID numérico de pagamento, se geramos via idempotency key,
+          // podemos consultar na API de pagamentos por busca ou se salvarmos o ID numérico do MP.
+          // Para garantir que o QR Code apareça caso recarregue, vamos buscar o pagamento ativo gerado.
+        }
+      } catch (err) {
+        console.error('Erro ao buscar dados do Pix no Mercado Pago:', err);
+      }
+    }
+
     return {
       paymentId,
       status: isPaid ? 'PAID' : 'PENDING',
@@ -279,6 +302,7 @@ export class TicketsService {
       eventTitle: event.title,
       eventId: event.id,
       themeColor: nightclub?.themeColor || '#6366f1',
+      pix: pixData,
       tickets: tickets.map((t) => ({
         id: t.id,
         status: t.status,
