@@ -4,11 +4,15 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { Ticket, TicketStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { MercadoPagoConfig, Payment } from 'mercadopago';
+import { isAfter } from 'date-fns';
+import { decrypt } from '../common/utils/encryption.util';
 import axios from 'axios';
 
 interface MercadoPagoPaymentResponse {
@@ -41,6 +45,22 @@ function getErrorDetails(error: unknown): {
 export class TicketsService {
   constructor(private prisma: PrismaService) {}
 
+  // 🛡️ Motor de resiliência para chamadas externas (Mercado Pago)
+  private async withRetry<T>(operation: () => any, maxRes = 3): Promise<T> {
+    let attempt = 1;
+    while (attempt <= maxRes) {
+      try {
+        return await operation();
+      } catch (error: any) {
+        if (attempt === maxRes) throw error;
+        const delay = attempt * 1000;
+        await new Promise((res) => setTimeout(res, delay));
+        attempt++;
+      }
+    }
+    throw new Error('Falha inesperada no motor de retry.');
+  }
+
   // 🛡️ Método privado para expirar tickets pendentes e devolver o estoque ao lote
   private async expireOutdatedPendingTickets(batchId: string) {
     const now = new Date();
@@ -60,7 +80,7 @@ export class TicketsService {
     const expiredIds = expiredTickets.map((t) => t.id);
 
     await this.prisma.$transaction(async (tx) => {
-      // 1. Atualiza os tickets expirados usando o enum correto do seu schema (CANCELED)
+      // 1. Atualiza os tickets expirados para CANCELED
       await tx.ticket.updateMany({
         where: { id: { in: expiredIds } },
         data: { status: TicketStatus.CANCELED },
@@ -80,6 +100,41 @@ export class TicketsService {
     console.log(
       `🧹 [TicketsService] ${expiredTickets.length} ingressos expirados tiveram o estoque devolvido ao lote ${batchId}.`,
     );
+  }
+
+  // 🔑 Função auxiliar para extrair e descriptografar o Token do Mercado Pago da balada (Seguindo o padrão das reservas)
+  private getNightclubAccessToken(nightclub: any): string {
+    let nightclubSettings: any = {};
+    if (nightclub.settings) {
+      if (typeof nightclub.settings === 'string') {
+        try {
+          nightclubSettings = JSON.parse(nightclub.settings);
+        } catch (e) {
+          console.error('Erro ao ler settings da balada:', e);
+        }
+      } else {
+        nightclubSettings = nightclub.settings;
+      }
+    }
+
+    const tokenRaiz = nightclub.mpAccessToken;
+    const tokenSettings = nightclubSettings.mpAccessToken;
+    const rawToken = tokenRaiz || tokenSettings;
+
+    if (!rawToken || typeof rawToken !== 'string') {
+      return '';
+    }
+
+    try {
+      const tokenLimpo = rawToken.trim();
+      if (tokenLimpo.includes(':')) {
+        return decrypt(tokenLimpo).trim();
+      }
+      return tokenLimpo;
+    } catch (error) {
+      console.error('Falha ao descriptografar token do MP:', error);
+      return '';
+    }
   }
 
   async createTickets(dto: CreateTicketDto) {
@@ -115,8 +170,8 @@ export class TicketsService {
 
     const nightclub = batch.event.nightclub;
 
-    // Token principal da balada + fallback da plataforma
-    const primaryAccessToken = nightclub.mpAccessToken;
+    // Obtém o token da balada tratado/descriptografado + fallback da plataforma
+    const primaryAccessToken = this.getNightclubAccessToken(nightclub);
     const fallbackAccessToken = process.env.MP_PLATFORM_ACCESS_TOKEN;
 
     if (!primaryAccessToken && !fallbackAccessToken) {
@@ -128,6 +183,7 @@ export class TicketsService {
     const unitPrice = Number(batch.price);
     const totalAmount = unitPrice * dto.quantity;
     const paymentId = `TICKET_${randomUUID()}`;
+    const paymentDeadline = new Date(Date.now() + 30 * 60 * 1000);
 
     // 3. Criar os ingressos como PENDING
     const createdTickets: Ticket[] = [];
@@ -145,7 +201,7 @@ export class TicketsService {
           status: TicketStatus.PENDING,
           validationToken: randomUUID(),
           paymentId: `${paymentId}_${i}`,
-          paymentDeadline: new Date(Date.now() + 30 * 60 * 1000),
+          paymentDeadline,
         },
       });
 
@@ -154,9 +210,11 @@ export class TicketsService {
 
     // Requisição Pix no Mercado Pago
     const requestMpPix = async (token: string) => {
-      return axios.post<MercadoPagoPaymentResponse>(
-        'https://api.mercadopago.com/v1/payments',
-        {
+      const client = new MercadoPagoConfig({ accessToken: token });
+      const payment = new Payment(client);
+
+      return payment.create({
+        body: {
           transaction_amount: totalAmount,
           description: `Compra de ${dto.quantity}x Ingresso(s) - ${batch.event.title} (${batch.name})`,
           payment_method_id: 'pix',
@@ -170,19 +228,15 @@ export class TicketsService {
                 }
               : undefined,
           },
+          date_of_expiration: paymentDeadline.toISOString(),
+          external_reference: paymentId,
         },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'X-Idempotency-Key': paymentId,
-          },
-        },
-      );
+      });
     };
 
     // 4. Integrar com o Mercado Pago para gerar a cobrança Pix
     try {
-      let mpResponse;
+      let mpResponse: any;
 
       try {
         if (primaryAccessToken) {
@@ -206,20 +260,30 @@ export class TicketsService {
         mpResponse = await requestMpPix(fallbackAccessToken);
       }
 
-      const paymentData = mpResponse.data as MercadoPagoPaymentResponse;
-
-      const transactionData =
-        paymentData.point_of_interaction?.transaction_data;
+      const transactionData = mpResponse.point_of_interaction?.transaction_data;
 
       const qrCodePix: string = transactionData?.qr_code ?? '';
       const qrCodeBase64: string = transactionData?.qr_code_base64 ?? '';
       const ticketUrl: string = transactionData?.ticket_url ?? '';
+      const mpPaymentId = mpResponse.id?.toString() || paymentId;
+
+      // Atualiza o paymentId dos tickets com o ID numérico/real do Mercado Pago para permitir consulta no checkout
+      await this.prisma.ticket.updateMany({
+        where: {
+          paymentId: {
+            startsWith: paymentId,
+          },
+        },
+        data: {
+          paymentId: mpPaymentId,
+        },
+      });
 
       return {
         success: true,
         totalAmount,
         ticketsCount: createdTickets.length,
-        paymentId,
+        paymentId: mpPaymentId,
         pix: {
           qrCode: qrCodePix,
           qrCodeBase64,
@@ -245,14 +309,15 @@ export class TicketsService {
   }
 
   // ===========================================================================
-  // 5. BUSCAR DADOS DO CHECKOUT DO INGRESSO (COM CONSULTA AO MP SE PENDENTE)
+  // 5. BUSCAR DADOS DO CHECKOUT DO INGRESSO (COM RECUPERAÇÃO DO PIX NO MP)
   // ===========================================================================
   async getCheckoutData(paymentId: string) {
     const tickets = await this.prisma.ticket.findMany({
       where: {
-        paymentId: {
-          startsWith: paymentId,
-        },
+        OR: [
+          { paymentId: paymentId },
+          { paymentId: { startsWith: paymentId } },
+        ],
       },
       include: {
         event: {
@@ -273,36 +338,83 @@ export class TicketsService {
 
     const isPaid = tickets.every((t) => t.status === TicketStatus.PAID);
 
+    // Validação de prazo de expiração
+    if (
+      !isPaid &&
+      firstTicket.paymentDeadline &&
+      isAfter(new Date(), new Date(firstTicket.paymentDeadline))
+    ) {
+      await this.prisma.ticket.updateMany({
+        where: {
+          paymentId: firstTicket.paymentId || paymentId,
+        },
+        data: { status: TicketStatus.CANCELED },
+      });
+      throw new BadRequestException(
+        'O prazo para pagamento deste ingresso expirou.',
+      );
+    }
+
     let pixData = {
       qrCode: '',
       qrCodeBase64: '',
       ticketUrl: '',
+      expiresAt: firstTicket.paymentDeadline,
     };
 
-    // Se não estiver pago, tenta buscar os dados do Pix/Pagamento no Mercado Pago
-    if (!isPaid) {
+    // Se não estiver pago, busca os dados atualizados do Pix diretamente no Mercado Pago
+    if (!isPaid && firstTicket.paymentId) {
       try {
         const token =
-          nightclub.mpAccessToken || process.env.MP_PLATFORM_ACCESS_TOKEN;
+          this.getNightclubAccessToken(nightclub) ||
+          process.env.MP_PLATFORM_ACCESS_TOKEN;
+
         if (token) {
-          // Buscamos o pagamento no Mercado Pago usando o X-Idempotency-Key ou buscando pelo external_reference / id se armazenado.
-          // Como o Mercado Pago armazena por ID numérico de pagamento, se geramos via idempotency key,
-          // podemos consultar na API de pagamentos por busca ou se salvarmos o ID numérico do MP.
-          // Para garantir que o QR Code apareça caso recarregue, vamos buscar o pagamento ativo gerado.
+          const client = new MercadoPagoConfig({ accessToken: token });
+          const payment = new Payment(client);
+
+          const existing: any = await this.withRetry(() =>
+            payment.get({ id: firstTicket.paymentId as string }),
+          );
+
+          if (existing.status === 'approved') {
+            // Se já foi aprovado no MP mas ainda não atualizou no banco, atualiza
+            await this.prisma.ticket.updateMany({
+              where: { paymentId: firstTicket.paymentId },
+              data: { status: TicketStatus.PAID },
+            });
+          } else if (
+            existing.status === 'pending' ||
+            existing.status === 'in_process'
+          ) {
+            const transactionData =
+              existing.point_of_interaction?.transaction_data;
+            pixData.qrCode = transactionData?.qr_code || '';
+            pixData.qrCodeBase64 = transactionData?.qr_code_base64 || '';
+            pixData.ticketUrl = transactionData?.ticket_url || '';
+          }
         }
       } catch (err) {
-        console.error('Erro ao buscar dados do Pix no Mercado Pago:', err);
+        console.warn(
+          '⚠️ [TicketsService] Não foi possível recuperar o Pix ativo no Mercado Pago:',
+          err,
+        );
       }
     }
 
+    const totalAmount = tickets.reduce((acc, t) => acc + Number(t.price), 0);
+
     return {
-      paymentId,
+      paymentId: firstTicket.paymentId || paymentId,
       status: isPaid ? 'PAID' : 'PENDING',
-      totalAmount: tickets.reduce((acc, t) => acc + Number(t.price), 0),
+      totalAmount,
       eventTitle: event.title,
       eventId: event.id,
       themeColor: nightclub?.themeColor || '#6366f1',
-      pix: pixData,
+      pix: {
+        ...pixData,
+        amount: totalAmount,
+      },
       tickets: tickets.map((t) => ({
         id: t.id,
         status: t.status,
