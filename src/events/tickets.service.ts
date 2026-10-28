@@ -7,6 +7,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { Ticket, TicketStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
@@ -27,7 +28,6 @@ interface MercadoPagoPaymentResponse {
   [key: string]: unknown;
 }
 
-// Função auxiliar isolada com tipagem segura para calar o ESLint nos blocos catch
 function getErrorDetails(error: unknown): {
   data: unknown;
   message: string;
@@ -43,9 +43,11 @@ function getErrorDetails(error: unknown): {
 
 @Injectable()
 export class TicketsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private mailService: MailService,
+  ) {}
 
-  // 🛡️ Motor de resiliência para chamadas externas (Mercado Pago)
   private async withRetry<T>(operation: () => any, maxRes = 3): Promise<T> {
     let attempt = 1;
     while (attempt <= maxRes) {
@@ -61,7 +63,6 @@ export class TicketsService {
     throw new Error('Falha inesperada no motor de retry.');
   }
 
-  // 🛡️ Método privado para expirar tickets pendentes e devolver o estoque ao lote
   private async expireOutdatedPendingTickets(batchId: string) {
     const now = new Date();
 
@@ -80,13 +81,11 @@ export class TicketsService {
     const expiredIds = expiredTickets.map((t) => t.id);
 
     await this.prisma.$transaction(async (tx) => {
-      // 1. Atualiza os tickets expirados para CANCELED
       await tx.ticket.updateMany({
         where: { id: { in: expiredIds } },
         data: { status: TicketStatus.CANCELED },
       });
 
-      // 2. Devolve a quantidade de estoque ao lote
       await tx.ticketBatch.update({
         where: { id: batchId },
         data: {
@@ -102,7 +101,6 @@ export class TicketsService {
     );
   }
 
-  // 🔑 Função auxiliar para extrair e descriptografar o Token do Mercado Pago da balada (Seguindo o padrão das reservas)
   private getNightclubAccessToken(nightclub: any): string {
     let nightclubSettings: any = {};
     if (nightclub.settings) {
@@ -138,10 +136,8 @@ export class TicketsService {
   }
 
   async createTickets(dto: CreateTicketDto) {
-    // 0. Limpa tickets pendentes expirados antes de validar estoque e criar novos
     await this.expireOutdatedPendingTickets(dto.batchId);
 
-    // 1. Buscar o lote e o evento vinculado para pegar a balada e o preço
     const batch = await this.prisma.ticketBatch.findUnique({
       where: { id: dto.batchId },
       include: {
@@ -159,7 +155,6 @@ export class TicketsService {
       );
     }
 
-    // 2. Validar se há estoque suficiente no lote
     const availableStock = batch.totalQuantity - batch.soldQuantity;
 
     if (dto.quantity > availableStock) {
@@ -169,8 +164,6 @@ export class TicketsService {
     }
 
     const nightclub = batch.event.nightclub;
-
-    // Obtém o token da balada tratado/descriptografado + fallback da plataforma
     const primaryAccessToken = this.getNightclubAccessToken(nightclub);
     const fallbackAccessToken = process.env.MP_PLATFORM_ACCESS_TOKEN;
 
@@ -185,7 +178,6 @@ export class TicketsService {
     const paymentId = `TICKET_${randomUUID()}`;
     const paymentDeadline = new Date(Date.now() + 30 * 60 * 1000);
 
-    // 3. Criar os ingressos como PENDING
     const createdTickets: Ticket[] = [];
 
     for (let i = 0; i < dto.quantity; i++) {
@@ -208,7 +200,6 @@ export class TicketsService {
       createdTickets.push(ticket);
     }
 
-    // Requisição Pix no Mercado Pago
     const requestMpPix = async (token: string) => {
       const client = new MercadoPagoConfig({ accessToken: token });
       const payment = new Payment(client);
@@ -234,7 +225,6 @@ export class TicketsService {
       });
     };
 
-    // 4. Integrar com o Mercado Pago para gerar a cobrança Pix
     try {
       let mpResponse: any;
 
@@ -256,7 +246,6 @@ export class TicketsService {
           throw primaryError;
         }
 
-        // Tenta com o token da plataforma
         mpResponse = await requestMpPix(fallbackAccessToken);
       }
 
@@ -267,7 +256,6 @@ export class TicketsService {
       const ticketUrl: string = transactionData?.ticket_url ?? '';
       const mpPaymentId = mpResponse.id?.toString() || paymentId;
 
-      // Atualiza o paymentId dos tickets com o ID numérico/real do Mercado Pago para permitir consulta no checkout
       await this.prisma.ticket.updateMany({
         where: {
           paymentId: {
@@ -308,9 +296,6 @@ export class TicketsService {
     }
   }
 
-  // ===========================================================================
-  // 5. BUSCAR DADOS DO CHECKOUT DO INGRESSO (COM RECUPERAÇÃO DO PIX NO MP)
-  // ===========================================================================
   async getCheckoutData(paymentId: string) {
     const tickets = await this.prisma.ticket.findMany({
       where: {
@@ -325,6 +310,7 @@ export class TicketsService {
             nightclub: true,
           },
         },
+        batch: true,
       },
     });
 
@@ -336,9 +322,8 @@ export class TicketsService {
     const event = firstTicket.event;
     const nightclub = event.nightclub;
 
-    const isPaid = tickets.every((t) => t.status === TicketStatus.PAID);
+    let isPaid = tickets.every((t) => t.status === TicketStatus.PAID);
 
-    // Validação de prazo de expiração
     if (
       !isPaid &&
       firstTicket.paymentDeadline &&
@@ -362,7 +347,6 @@ export class TicketsService {
       expiresAt: firstTicket.paymentDeadline,
     };
 
-    // Se não estiver pago, busca os dados atualizados do Pix diretamente no Mercado Pago
     if (!isPaid && firstTicket.paymentId) {
       try {
         const token =
@@ -378,11 +362,35 @@ export class TicketsService {
           );
 
           if (existing.status === 'approved') {
-            // Se já foi aprovado no MP mas ainda não atualizou no banco, atualiza
             await this.prisma.ticket.updateMany({
               where: { paymentId: firstTicket.paymentId },
               data: { status: TicketStatus.PAID },
             });
+            isPaid = true;
+
+            // Dispara e-mail de confirmação se ainda não foi enviado
+            if (firstTicket.customerEmail) {
+              this.mailService
+                .sendReservationConfirmation(
+                  {
+                    ...firstTicket,
+                    space: {
+                      name: `${event.title} - ${firstTicket.batch?.name || 'Ingresso'}`,
+                    },
+                    amount: tickets.reduce(
+                      (acc, t) => acc + Number(t.price),
+                      0,
+                    ),
+                  } as any,
+                  nightclub.name,
+                )
+                .catch((err) =>
+                  console.error(
+                    'Erro ao enviar e-mail de ingresso:',
+                    err.message,
+                  ),
+                );
+            }
           } else if (
             existing.status === 'pending' ||
             existing.status === 'in_process'
@@ -425,8 +433,32 @@ export class TicketsService {
   }
 
   // ===========================================================================
-  // 6. VALIDAÇÃO DE ENTRADA NA PORTARIA (Check-in do Ingresso)
+  // 7. LISTAR INGRESSOS POR EVENTO (Para o Dashboard)
   // ===========================================================================
+  async getTicketsByEvent(eventId: string) {
+    const tickets = await this.prisma.ticket.findMany({
+      where: { eventId },
+      include: {
+        batch: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return tickets.map((t) => ({
+      id: t.id,
+      customerName: t.customerName,
+      customerEmail: t.customerEmail,
+      customerPhone: t.customerPhone,
+      customerCpf: t.customerCpf,
+      price: Number(t.price),
+      status: t.status,
+      batchName: t.batch?.name || 'Lote Único',
+      validationToken: t.validationToken,
+      createdAt: t.createdAt,
+      paymentDeadline: t.paymentDeadline,
+    }));
+  }
+
   async validateTicket(validationToken: string) {
     const ticket = await this.prisma.ticket.findUnique({
       where: { validationToken },
@@ -458,7 +490,6 @@ export class TicketsService {
       );
     }
 
-    // Atualiza o status para CHECKED_IN
     const updatedTicket = await this.prisma.ticket.update({
       where: {
         id: ticket.id,

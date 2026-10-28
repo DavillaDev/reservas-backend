@@ -3,8 +3,6 @@
 import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
 import { TicketsService } from './tickets.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
-// Ajuste o caminho do seu JwtAuthGuard conforme o projeto
-// import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('tickets')
 export class TicketsController {
@@ -15,10 +13,16 @@ export class TicketsController {
     return this.ticketsService.createTickets(dto);
   }
 
-  // Rota para buscar os dados do checkout/Pix do ingresso (Corrige o erro 404)
+  // Rota para buscar os dados do checkout/Pix do ingresso
   @Get('checkout/:paymentId')
   async getCheckout(@Param('paymentId') paymentId: string) {
     return this.ticketsService.getCheckoutData(paymentId);
+  }
+
+  // 📊 NOVO: Rota para o Dashboard listar os ingressos vendidos por Evento
+  @Get('event/:eventId')
+  async getTicketsByEvent(@Param('eventId') eventId: string) {
+    return this.ticketsService.getTicketsByEvent(eventId);
   }
 
   // Suporte via Body (legado/atual)
@@ -28,7 +32,6 @@ export class TicketsController {
   }
 
   // Suporte via Parâmetro na URL (Padrão idêntico ao check-in de reservas)
-  // @UseGuards(JwtAuthGuard) // Descomente caso sua rota exija autenticação de staff
   @Post('check-in/:token')
   async validateTicketParam(@Param('token') token: string) {
     return this.ticketsService.validateTicket(token);
