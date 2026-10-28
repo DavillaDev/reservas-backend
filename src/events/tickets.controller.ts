@@ -1,6 +1,6 @@
 // src/events/tickets.controller.ts
 
-import { Controller, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
 import { TicketsService } from './tickets.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 // Ajuste o caminho do seu JwtAuthGuard conforme o projeto
@@ -13,6 +13,12 @@ export class TicketsController {
   @Post('buy')
   async buyTickets(@Body() dto: CreateTicketDto) {
     return this.ticketsService.createTickets(dto);
+  }
+
+  // Rota para buscar os dados do checkout/Pix do ingresso (Corrige o erro 404)
+  @Get('checkout/:paymentId')
+  async getCheckout(@Param('paymentId') paymentId: string) {
+    return this.ticketsService.getCheckoutData(paymentId);
   }
 
   // Suporte via Body (legado/atual)

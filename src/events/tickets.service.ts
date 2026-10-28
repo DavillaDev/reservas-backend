@@ -244,7 +244,52 @@ export class TicketsService {
   }
 
   // ===========================================================================
-  // 5. VALIDAÇÃO DE ENTRADA NA PORTARIA (Check-in do Ingresso)
+  // 5. BUSCAR DADOS DO CHECKOUT DO INGRESSO (Correção do Erro 404)
+  // ===========================================================================
+  async getCheckoutData(paymentId: string) {
+    const tickets = await this.prisma.ticket.findMany({
+      where: {
+        paymentId: {
+          startsWith: paymentId,
+        },
+      },
+      include: {
+        event: {
+          include: {
+            nightclub: true,
+          },
+        },
+      },
+    });
+
+    if (!tickets || tickets.length === 0) {
+      throw new NotFoundException('Cobrança ou ingressos não encontrados.');
+    }
+
+    const firstTicket = tickets[0];
+    const event = firstTicket.event;
+    const nightclub = event.nightclub;
+
+    const isPaid = tickets.every((t) => t.status === 'PAID');
+
+    return {
+      paymentId,
+      status: isPaid ? 'PAID' : 'PENDING',
+      totalAmount: tickets.reduce((acc, t) => acc + Number(t.price), 0),
+      eventTitle: event.title,
+      eventId: event.id,
+      themeColor: nightclub?.themeColor || '#6366f1',
+      tickets: tickets.map((t) => ({
+        id: t.id,
+        status: t.status,
+        validationToken: t.validationToken,
+        paymentDeadline: t.paymentDeadline,
+      })),
+    };
+  }
+
+  // ===========================================================================
+  // 6. VALIDAÇÃO DE ENTRADA NA PORTARIA (Check-in do Ingresso)
   // ===========================================================================
   async validateTicket(validationToken: string) {
     const ticket = await this.prisma.ticket.findUnique({
@@ -296,7 +341,7 @@ export class TicketsService {
       date: ticket.event.date,
       amount: Number(updatedTicket.price),
       space: {
-        name: `${ticket.event.title} • ${ticket.batch.name}`,
+        name: `${ticket.event.title}\n${ticket.batch.name}`,
       },
       isTicket: true,
       isVip: false,
