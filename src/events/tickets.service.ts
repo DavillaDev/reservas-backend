@@ -265,7 +265,9 @@ export class TicketsService {
 
     if (ticket.status === 'CHECKED_IN') {
       throw new BadRequestException(
-        `Ingresso já utilizado! Check-in realizado em: ${ticket.updatedAt.toLocaleString()}`,
+        `Ingresso já utilizado! Check-in realizado em: ${ticket.updatedAt.toLocaleString(
+          'pt-BR',
+        )}`,
       );
     }
 
@@ -285,15 +287,20 @@ export class TicketsService {
       },
     });
 
+    // Retorno compatível com o formato esperado pela tela de CheckIn
     return {
-      success: true,
-      message: '✅ Entrada liberada com sucesso!',
-      ticket: {
-        id: updatedTicket.id,
-        customerName: updatedTicket.customerName,
-        eventTitle: ticket.event.title,
-        batchName: ticket.batch.name,
+      id: updatedTicket.id,
+      customerName: updatedTicket.customerName,
+      customerPhone: updatedTicket.customerPhone,
+      customerEmail: updatedTicket.customerEmail,
+      date: ticket.event.date,
+      amount: Number(updatedTicket.price),
+      space: {
+        name: `${ticket.event.title} • ${ticket.batch.name}`,
       },
+      isTicket: true,
+      isVip: false,
+      status: updatedTicket.status,
     };
   }
 }
