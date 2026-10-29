@@ -368,12 +368,15 @@ export class TicketsService {
             });
             isPaid = true;
 
-            // Dispara e-mail de confirmação se ainda não foi enviado
+            // Dispara e-mail de confirmação blindado contra erros de propriedades ausentes
             if (firstTicket.customerEmail) {
               this.mailService
                 .sendReservationConfirmation(
                   {
                     ...firstTicket,
+                    customerName: firstTicket.customerName,
+                    customerPhone: firstTicket.customerPhone,
+                    customerEmail: firstTicket.customerEmail,
                     space: {
                       name: `${event.title} - ${firstTicket.batch?.name || 'Ingresso'}`,
                     },
@@ -381,8 +384,9 @@ export class TicketsService {
                       (acc, t) => acc + Number(t.price),
                       0,
                     ),
+                    nightclub: nightclub,
                   } as any,
-                  nightclub.name,
+                  nightclub?.name || event.title,
                 )
                 .catch((err) =>
                   console.error(
