@@ -1,3 +1,4 @@
+// src/payments/payments.module.ts
 import { Module } from '@nestjs/common';
 import { PaymentsController } from './payments.controller';
 
@@ -29,6 +30,6 @@ import { NotificationsService } from '../notifications/notifications.service';
     ConfigService,
     NotificationsService,
   ],
-  exports: [CheckoutService, WebhookService], // Exporta só o que for chamado de fora
+  exports: [CheckoutService, WebhookService, MailService], // 👈 Adicionado MailService aqui para o EventsModule liberar para o TicketsService
 })
 export class PaymentsModule {}
