@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Resend } from 'resend';
 
 // Use seu domínio verificado como um fallback seguro para o remetente
-const DEFAULT_FROM_DOMAIN = 'davillaconsultoria.com.br';
+const DEFAULT_FROM_DOMAIN = 'reservasclub.com.br';
 const DEFAULT_FROM_ADDRESS = `nao-responda@${DEFAULT_FROM_DOMAIN}`;
 
 @Injectable()

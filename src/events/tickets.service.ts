@@ -470,6 +470,7 @@ export class TicketsService {
 
     return tickets.map((t) => ({
       id: t.id,
+      paymentId: t.paymentId, // 👈 ADICIONADO AQUI PARA O FRONT-END ENCONTRAR O CHECKOUT
       customerName: t.customerName,
       customerEmail: t.customerEmail,
       customerPhone: t.customerPhone,
