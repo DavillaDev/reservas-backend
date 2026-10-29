@@ -361,14 +361,24 @@ export class TicketsService {
             payment.get({ id: firstTicket.paymentId as string }),
           );
 
+          console.log(
+            `🔍 [Mercado Pago Check] ID: ${firstTicket.paymentId} | Status no MP: ${existing.status}`,
+          );
+
           if (existing.status === 'approved') {
+            console.log(`💰 [PIX APROVADO] Atualizando ingressos para PAID...`);
+
             await this.prisma.ticket.updateMany({
               where: { paymentId: firstTicket.paymentId },
               data: { status: TicketStatus.PAID },
             });
             isPaid = true;
 
-            // Dispara e-mail de confirmação blindado contra erros de propriedades ausentes
+            console.log(
+              `📧 [TENTATIVA DE EMAIL] Verificando e-mail do cliente: ${firstTicket.customerEmail}`,
+            );
+
+            // Dispara e-mail de confirmação blindado e com logs detalhados
             if (firstTicket.customerEmail) {
               this.mailService
                 .sendReservationConfirmation(
@@ -388,12 +398,22 @@ export class TicketsService {
                   } as any,
                   nightclub?.name || event.title,
                 )
+                .then((sent) => {
+                  console.log(
+                    `📧 [RESULTADO DO EMAIL] Envio concluído com sucesso? ${sent}`,
+                  );
+                })
                 .catch((err) =>
                   console.error(
-                    'Erro ao enviar e-mail de ingresso:',
+                    '❌ [ERRO AO DISPARAR EMAIL DE INGRESSO]:',
                     err.message,
+                    err.stack,
                   ),
                 );
+            } else {
+              console.warn(
+                `⚠️ [AVISO] O ingresso não possui customerEmail cadastrado.`,
+              );
             }
           } else if (
             existing.status === 'pending' ||
